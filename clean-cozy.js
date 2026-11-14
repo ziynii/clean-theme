@@ -1490,6 +1490,44 @@ html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTe
  background:#F1F2F4!important;color:#A7ABB0!important;-webkit-text-fill-color:#A7ABB0!important;
 }
 
+
+/* Info box on light themes: Zeta supplies white text on nested spans. */
+[data-sentry-component="InfoBoxContent"],
+[data-sentry-component="InfoBoxExpandedContent"],
+[data-sentry-component="InfoBoxCharacterSection"]{
+  background:#FFFFFF!important;
+  color:var(--cc-text)!important;
+  -webkit-text-fill-color:var(--cc-text)!important;
+}
+[data-sentry-component="InfoBoxContent"] .chat,
+[data-sentry-component="InfoBoxExpandedContent"] .chat,
+[data-sentry-component="InfoBoxCharacterSection"] .chat,
+[data-sentry-component="InfoBoxContent"] .chat span,
+[data-sentry-component="InfoBoxExpandedContent"] .chat span,
+[data-sentry-component="InfoBoxCharacterSection"] .chat span{
+  color:var(--cc-text)!important;
+  -webkit-text-fill-color:var(--cc-text)!important;
+  opacity:1!important;
+}
+[data-sentry-component="InfoBoxContent"] .chat .font-bold,
+[data-sentry-component="InfoBoxExpandedContent"] .chat .font-bold,
+[data-sentry-component="InfoBoxCharacterSection"] .chat .font-bold{
+  color:#34383E!important;
+  -webkit-text-fill-color:#34383E!important;
+  font-weight:650!important;
+}
+[data-sentry-component="InfoBoxContent"] .chat [class*="text-white/70"],
+[data-sentry-component="InfoBoxExpandedContent"] .chat [class*="text-white/70"],
+[data-sentry-component="InfoBoxCharacterSection"] .chat [class*="text-white/70"],
+[data-sentry-component="InfoBoxCharacterSection"] > span.caption1{
+  color:#737981!important;
+  -webkit-text-fill-color:#737981!important;
+  opacity:1!important;
+}
+[data-sentry-component="InfoBoxContent"] [data-sentry-component="InfoBoxCollapseToggle"] svg{
+  color:#747981!important;
+}
+
 `;
 (document.head||document.documentElement).appendChild(style);
 let panel=null,toggle=null,editShortcut=null,observer=null,scheduled=false;
