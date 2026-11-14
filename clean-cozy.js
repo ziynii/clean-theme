@@ -1418,6 +1418,13 @@ html.cc-dialogue-highlight.cc-highlight-fallback [data-sentry-component="ChatRoo
  text-underline-offset:3px!important;
 }
 
+/* Inline pastel underline: moves with text and never lags during scroll. */
+html.cc-dialogue-highlight .cc-dialogue-inline{
+ background-image:linear-gradient(to bottom,transparent 66%,rgba(${accentRgb},.34) 66%,rgba(${accentRgb},.34) 91%,transparent 91%)!important;
+ background-repeat:repeat!important;
+ -webkit-box-decoration-break:clone;box-decoration-break:clone;
+ text-decoration:none!important;
+}
 /* V32: pastel user bubble wins over inherited gray overrides */
 html [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"],
 html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]{
@@ -1535,78 +1542,53 @@ const dialogueHighlightWebKit=/AppleWebKit\//.test(navigator.userAgent)&&!/Edg\/
 const dialogueHighlightName='cc-dialogue-text';
 let dialogueInk=null;
 let highlightScope=null;
-// Touch browsers sometimes expose CSS.highlights without painting them.
-// A geometry-only overlay keeps React-owned message DOM completely unchanged.
-const usePaintedMobileHighlight=window.matchMedia?.('(pointer:coarse)').matches===true;
-let dialoguePaintLayer=null,dialoguePaintSignature='',dialoguePaintFrame=0;
-function clearPaintedDialogue(){
- if(dialoguePaintFrame){cancelAnimationFrame(dialoguePaintFrame);dialoguePaintFrame=0;}
- dialoguePaintLayer?.remove();dialoguePaintLayer=null;dialoguePaintSignature='';
-}
-function paintDialoguePositions(){
- dialoguePaintFrame=0;
- if(!usePaintedMobileHighlight||!settings.dialogueHighlight){clearPaintedDialogue();return;}
- const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
- if(!room){clearPaintedDialogue();return;}
- if(!dialoguePaintLayer){
-  dialoguePaintLayer=document.createElement('div');
-  dialoguePaintLayer.id='cc-dialogue-paint-layer';
-  dialoguePaintLayer.style.cssText='position:fixed;inset:0;z-index:15;pointer-events:none;overflow:hidden;contain:layout style;';
-  document.body.appendChild(dialoguePaintLayer);
+// Mobile browsers can expose CSS.highlights but fail to paint them.
+// Wrap stable dialogue text directly: no viewport coordinates or scroll listener.
+const useInlineMobileHighlight=window.matchMedia?.('(pointer:coarse)').matches===true;
+const dialogueInlineClass='cc-dialogue-inline';
+function clearInlineDialogue(){
+ const spans=document.querySelectorAll('span.'+dialogueInlineClass);
+ for(const span of spans){
+  if(!span.isConnected)continue;
+  span.replaceWith(document.createTextNode(span.textContent||''));
  }
+}
+function updateInlineDialogue(){
+ if(!useInlineMobileHighlight)return;
+ if(!settings.dialogueHighlight){clearInlineDialogue();return;}
+ const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
+ if(!room)return;
  const bubbles=room.querySelectorAll('[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"], [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]');
- const pieces=[];
  for(const bubble of bubbles){
-  const box=bubble.getBoundingClientRect();
-  if(box.bottom<0||box.top>innerHeight)continue;
+  // During generation Zeta has not yet finalized its em / dialogue markup.
+  // Skip the candidate until the loading indicator disappears.
+  if(bubble.closest('[data-sentry-component="CandidatePanel"]')?.querySelector('[data-testid="message-loading"]'))continue;
   for(const chat of bubble.querySelectorAll('.chat')){
    const walker=document.createTreeWalker(chat,NodeFilter.SHOW_TEXT);
-   let node;
+   const nodes=[];let node;
    while((node=walker.nextNode())){
     if(!node.textContent?.trim())continue;
-    let parent=node.parentElement,exclude=false;
+    let parent=node.parentElement,excluded=false;
     while(parent&&parent!==chat){
-     if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable]')){exclude=true;break;}
+     if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable],.'+dialogueInlineClass)){excluded=true;break;}
      parent=parent.parentElement;
     }
-    if(exclude)continue;
-    const range=document.createRange();range.selectNodeContents(node);
-    for(const r of range.getClientRects()){
-     const x=Math.max(0,r.left,box.left),end=Math.min(innerWidth,r.right,box.right);
-     if(end-x<1||r.bottom<=0||r.top>=innerHeight)continue;
-     const y=Math.min(innerHeight-2,Math.max(0,r.bottom-2.8));
-     pieces.push([Math.round(x*10)/10,Math.round(y*10)/10,Math.round((end-x)*10)/10]);
-     if(pieces.length>=450)break;
-    }
-    range.detach?.();
-    if(pieces.length>=450)break;
+    if(!excluded)nodes.push(node);
    }
-   if(pieces.length>=450)break;
+   for(const textNode of nodes){
+    if(!textNode.isConnected||textNode.parentElement?.closest('.'+dialogueInlineClass))continue;
+    const span=document.createElement('span');span.className=dialogueInlineClass;
+    textNode.replaceWith(span);span.appendChild(textNode);
+   }
   }
-  if(pieces.length>=450)break;
  }
- const signature=pieces.map(p=>p.join(',')).join(';');
- if(signature===dialoguePaintSignature)return;
- dialoguePaintSignature=signature;
- const fragment=document.createDocumentFragment();
- for(const [x,y,w] of pieces){
-  const line=document.createElement('span');
-  line.style.cssText='position:absolute;height:2px;border-radius:2px;background:rgba('+accentRgb+',.58);left:'+x+'px;top:'+y+'px;width:'+w+'px;';
-  fragment.appendChild(line);
- }
- dialoguePaintLayer.replaceChildren(fragment);
-}
-function queueDialoguePaint(){
- if(!usePaintedMobileHighlight||!settings.dialogueHighlight||dialoguePaintFrame)return;
- dialoguePaintFrame=requestAnimationFrame(paintDialoguePositions);
 }
 function updateDialogueHighlight(){
- if(usePaintedMobileHighlight){
+ if(useInlineMobileHighlight){
   if(dialogueHighlightSupported)CSS.highlights.delete(dialogueHighlightName);
-  if(!settings.dialogueHighlight)clearPaintedDialogue();else queueDialoguePaint();
+  updateInlineDialogue();
   return;
  }
-
  if(!dialogueHighlightSupported)return;
  if(!settings.dialogueHighlight){
   CSS.highlights.delete(dialogueHighlightName);
@@ -1617,29 +1599,27 @@ function updateDialogueHighlight(){
  if(!dialogueInk){dialogueInk=new Highlight();CSS.highlights.set(dialogueHighlightName,dialogueInk);}
  const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
  if(!room){dialogueInk.clear();return;}
- // Fresh ranges are needed when virtualized messages mount/unmount or React changes text.
  dialogueInk.clear();
  const bubbles=room.querySelectorAll('[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"], [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]');
  for(const bubble of bubbles){
-  const chats=bubble.querySelectorAll('.chat');
-  for(const chat of chats){
+  if(bubble.closest('[data-sentry-component="CandidatePanel"]')?.querySelector('[data-testid="message-loading"]'))continue;
+  for(const chat of bubble.querySelectorAll('.chat')){
    const walker=document.createTreeWalker(chat,NodeFilter.SHOW_TEXT);
    let node;
    while((node=walker.nextNode())){
-    if(!node.textContent||!node.textContent.trim())continue;
+    if(!node.textContent?.trim())continue;
     let parent=node.parentElement,excluded=false;
     while(parent&&parent!==chat){
      if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable]')){excluded=true;break;}
      parent=parent.parentElement;
     }
     if(excluded)continue;
-    const range=document.createRange();
-    range.selectNodeContents(node);
-    dialogueInk.add(range);
+    const range=document.createRange();range.selectNodeContents(node);dialogueInk.add(range);
    }
   }
  }
 }
+
 function applyOpts(){
  const root=document.documentElement;
  root.classList.toggle('cc-avatar-hidden',settings.avatarMode==='none');
@@ -2161,7 +2141,7 @@ function makeControls(){
  document.body.append(toggle,editShortcut,lineShortcut,panel);applyOpts();updateActionAvailability();
  window.addEventListener('resize',positionControls);
 }
-function stop(){clearPaintedDialogue();document.removeEventListener('scroll',queueDialoguePaint,true);restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dialogueHighlightSupported)CSS.highlights.delete(dialogueHighlightName);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);window.removeEventListener('resize',positionControls);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dialogueHighlightSupported)CSS.highlights.delete(dialogueHighlightName);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);window.removeEventListener('resize',positionControls);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -2169,5 +2149,5 @@ function stop(){clearPaintedDialogue();document.removeEventListener('scroll',que
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight','cc-highlight-fallback','cc-highlight-webkit');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('scroll',queueDialoguePaint,true);document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{if(document.querySelector('.cc-meta-date'))schedule();},60000);applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});window[KEY]={stop,version:VERSION,palette:chosenKey};
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{if(document.querySelector('.cc-meta-date'))schedule();},60000);applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});window[KEY]={stop,version:VERSION,palette:chosenKey};
 })();
