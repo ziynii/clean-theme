@@ -1536,11 +1536,6 @@ html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTe
 [data-sentry-component="InfoBoxExpandedContent"] > [data-sentry-component="InfoBoxCharacterSection"]{
   row-gap:10px!important;
 }
-/* Keep a clearly visible blank line between a message and the info box.
-   The line-formatting button edits message text, not this separately rendered widget. */
-[data-sentry-component="InfoBoxContent"].mx-2.my-3{
-  margin-top:1.5em!important;
-}
 
 `;
 (document.head||document.documentElement).appendChild(style);
@@ -1966,14 +1961,12 @@ function enhance(){
    No network calls, no automated native button clicks, no Zeta data changes.
    If the native editing textarea is open, format its draft; user manually saves. */
 let lineShortcut=null;
-function compactMarkdown(raw){
+function compactMarkdownPlain(raw){
  let t=raw.replace(/\r\n?/g,'\n').trim();
  if(!t)return t;
- // Normalize excess whitespace, then restore quote boundaries.
+ // Compact ordinary text while preserving the original quote-card separation.
  t=t.replace(/[ \t]*\n[ \t]*/g,' ').replace(/[ \t]{2,}/g,' ');
- // A Markdown quote must start its own line, including the >text variant.
  t=t.replace(/(^|\s)>[ \t]*(?=\S)/g,'\n> ');
- // An action immediately following a quote must be placed after the quote line.
  t=t.replace(/(>[^\n]*?)\s+(?=\*[^*\n]+\*)/g,'$1\n');
  const lines=t.split('\n').map(x=>x.trim()).filter(Boolean);
  const result=[];
@@ -1983,14 +1976,48 @@ function compactMarkdown(raw){
   else if(result.length)result[result.length-1]+=' '+line;
   else result.push(line);
  }
- // Adjacent quote lines form one block: no blank line between them.
- // Keep one empty line between a quote block and ordinary narration/dialogue.
  return result.map((line,i)=>{
   if(i===0)return line;
   const previous=result[i-1];
   return (line.startsWith('>')&&previous.startsWith('>')?'\n':'\n\n')+line;
  }).join('');
-} 
+}
+function compactMarkdown(raw){
+ // Protect complete ```InfoBox ... ``` code fences byte-for-byte, including
+ // internal blank lines, spaces, item order, and line breaks.
+ const text=raw.replace(/\r\n?/g,'\n');
+ const blockRe=/^```[ \t]*InfoBox[^\n]*\n[\s\S]*?^```[ \t]*(?=\n|$)/gmi;
+ const parts=[];
+ let last=0, match;
+ while((match=blockRe.exec(text))!==null){
+  parts.push({type:'ordinary',value:text.slice(last,match.index)});
+  parts.push({type:'infobox',value:match[0]});
+  last=blockRe.lastIndex;
+ }
+ parts.push({type:'ordinary',value:text.slice(last)});
+ // Don't compact an unfinished InfoBox while its editor content is incomplete.
+ const tail=parts[parts.length-1];
+ const open=tail.value.match(/^```[ \t]*InfoBox[^\n]*(?:\n|$)/gmi);
+ if(open && open.length%2===1){
+  const pos=tail.value.lastIndexOf(open[open.length-1]);
+  const before=tail.value.slice(0,pos);
+  const protectedTail=tail.value.slice(pos);
+  tail.value=before;
+  parts.push({type:'infobox',value:protectedTail});
+ }
+ let output='';
+ for(const part of parts){
+  if(part.type==='infobox'){
+   // Exactly three empty lines above each InfoBox (four newline characters).
+   output=output.replace(/\n+$/,'')+'\n\n\n\n'+part.value;
+  }else{
+   const compact=compactMarkdownPlain(part.value);
+   if(!compact)continue;
+   output+=(output && !output.endsWith('\n')?'\n\n':'')+compact;
+  }
+ }
+ return output;
+}
 let lineEditPending=false;
 let lineEditExpiresAt=0;
 let lineEditOpenTimer=null;
