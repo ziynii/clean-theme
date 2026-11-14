@@ -2124,7 +2124,7 @@ function makeControls(){
  lineShortcut.innerHTML='<svg viewBox="0 0 24 24" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 11h11M4 16h16M4 21h9"/></svg>';
  lineShortcut.addEventListener('click',pressLineTool);
  editShortcut=document.createElement('button');editShortcut.id='cc-edit-shortcut';editShortcut.type='button';
- editShortcut.title='메시지 수정';editShortcut.setAttribute('aria-label','메시지 수정');editShortcut.textContent='✎';
+ editShortcut.title='메시지 수정';editShortcut.setAttribute('aria-label','Edit message');editShortcut.textContent='✎';
  editShortcut.addEventListener('click',()=>runOriginalAction('edit'));
  toggle=document.createElement('button');toggle.id='cc-toggle';toggle.type='button';toggle.title='클린 코지 설정 및 채팅 도구';toggle.setAttribute('aria-label','클린 코지 설정 및 채팅 도구');toggle.textContent='⚙';
  panel=document.createElement('div');panel.id='cc-panel';panel.hidden=true;
