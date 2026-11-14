@@ -24,7 +24,8 @@ try{
  const saved=JSON.parse(localStorage.getItem(STORE)||'{}');
  const allowed=['both','none','userHidden','userHiddenHeart'];
  settings.avatarMode=allowed.includes(saved.avatarMode)?saved.avatarMode:(saved.avatar===false?'none':'both');
- settings.dialogueHighlight=saved.dialogueHighlight===true;
+ // Start with dialogue highlighting OFF on every fresh load, regardless of older stored preferences.
+ settings.dialogueHighlight=false;
 }catch(e){}
 const style=document.createElement('style');
 style.id=ID;
@@ -1390,35 +1391,8 @@ html.cc-avatar-user-hidden [data-sentry-component="RightTextContent"] > div{marg
  font-size:11px!important;
 }
 
-/* V30: native CSS text highlights; support standalone and mixed dialogue paragraphs.
-   Only character/user bubbles; em/i narration and quote cards are excluded. */
-::highlight(cc-dialogue-text){
- /* Use a real background-color: some browsers accept Custom Highlights but ignore underline styling. */
- background-color:rgba(${accentRgb},.28);
- text-decoration-line:underline;
- text-decoration-style:solid;
- text-decoration-color:rgba(${accentRgb},.60);
- text-decoration-thickness:2px;
- text-underline-offset:3px;
-}
-/* Safari/WebKit can suppress ::highlight() inside user-select:none chat bubbles.
-   Override only while the dialogue highlight setting is ON. */
-html.cc-dialogue-highlight.cc-highlight-webkit [data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"]) [data-sentry-component="ChatBubbleContainer"],
-html.cc-dialogue-highlight.cc-highlight-webkit [data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"]) [data-sentry-component="ChatBubbleContainer"] .chat,
-html.cc-dialogue-highlight.cc-highlight-webkit [data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"]) [data-sentry-component="ChatBubbleContainer"] .chat p{
- -webkit-user-select:text!important;user-select:text!important;
-}
-/* Fallback for browsers without the CSS Custom Highlight API.
-   Mixed paragraphs remain unstyled rather than highlight narration. */
-html.cc-dialogue-highlight.cc-highlight-fallback [data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"])
- [data-sentry-component="ChatBubbleContainer"] .chat > p:not(:has(em,i,blockquote)){
- text-decoration-line:underline!important;
- text-decoration-color:color-mix(in srgb, ${palette.accent} 64%, transparent)!important;
- text-decoration-thickness:2px!important;
- text-underline-offset:3px!important;
-}
-
-/* Inline pastel underline: moves with text and never lags during scroll. */
+/* One consistent inline text highlight on desktop and mobile.
+   Dialogue-only spans sit with the text, so there is no overlay or scrolling lag. */
 html.cc-dialogue-highlight .cc-dialogue-inline{
  background-image:linear-gradient(to bottom,transparent 66%,rgba(${accentRgb},.34) 66%,rgba(${accentRgb},.34) 91%,transparent 91%)!important;
  background-repeat:repeat!important;
@@ -1535,33 +1509,26 @@ function makeSendArrow(){
 const actionButtons=new Map();
 const marked=new Set();
 function save(){try{localStorage.setItem(STORE,JSON.stringify(settings));}catch(e){}}
-/* The browser's CSS Custom Highlight API styles text ranges without inserting
-   spans into the site's React-managed messages. One shared highlight, no saved text. */
-const dialogueHighlightSupported=!!(window.CSS&&CSS.highlights&&typeof window.Highlight==='function');
-const dialogueHighlightWebKit=/AppleWebKit\//.test(navigator.userAgent)&&!/Edg\/|OPR\//.test(navigator.userAgent);
-const dialogueHighlightName='cc-dialogue-text';
-let dialogueInk=null;
-let highlightScope=null;
-// Mobile browsers can expose CSS.highlights but fail to paint them.
-// Wrap stable dialogue text directly: no viewport coordinates or scroll listener.
-const useInlineMobileHighlight=window.matchMedia?.('(pointer:coarse)').matches===true;
+/* Unified desktop/mobile dialogue highlight. No overlay coordinates, no Custom Highlight API. */
 const dialogueInlineClass='cc-dialogue-inline';
 function clearInlineDialogue(){
  const spans=document.querySelectorAll('span.'+dialogueInlineClass);
  for(const span of spans){
   if(!span.isConnected)continue;
-  span.replaceWith(document.createTextNode(span.textContent||''));
+  // Preserve original text nodes so re-enabling can wrap them again.
+  span.replaceWith(...Array.from(span.childNodes));
  }
 }
-function updateInlineDialogue(){
- if(!useInlineMobileHighlight)return;
- if(!settings.dialogueHighlight){clearInlineDialogue();return;}
+function updateDialogueHighlight(){
+ if(!settings.dialogueHighlight){
+  clearInlineDialogue();
+  return;
+ }
  const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
  if(!room)return;
  const bubbles=room.querySelectorAll('[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"], [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]');
  for(const bubble of bubbles){
-  // During generation Zeta has not yet finalized its em / dialogue markup.
-  // Skip the candidate until the loading indicator disappears.
+  // Do not decorate partially generated candidate messages.
   if(bubble.closest('[data-sentry-component="CandidatePanel"]')?.querySelector('[data-testid="message-loading"]'))continue;
   for(const chat of bubble.querySelectorAll('.chat')){
    const walker=document.createTreeWalker(chat,NodeFilter.SHOW_TEXT);
@@ -1570,7 +1537,9 @@ function updateInlineDialogue(){
     if(!node.textContent?.trim())continue;
     let parent=node.parentElement,excluded=false;
     while(parent&&parent!==chat){
-     if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable],.'+dialogueInlineClass)){excluded=true;break;}
+     if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable],.'+dialogueInlineClass)){
+      excluded=true;break;
+     }
      parent=parent.parentElement;
     }
     if(!excluded)nodes.push(node);
@@ -1583,42 +1552,6 @@ function updateInlineDialogue(){
   }
  }
 }
-function updateDialogueHighlight(){
- if(useInlineMobileHighlight){
-  if(dialogueHighlightSupported)CSS.highlights.delete(dialogueHighlightName);
-  updateInlineDialogue();
-  return;
- }
- if(!dialogueHighlightSupported)return;
- if(!settings.dialogueHighlight){
-  CSS.highlights.delete(dialogueHighlightName);
-  dialogueInk=null;
-  highlightScope=null;
-  return;
- }
- if(!dialogueInk){dialogueInk=new Highlight();CSS.highlights.set(dialogueHighlightName,dialogueInk);}
- const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
- if(!room){dialogueInk.clear();return;}
- dialogueInk.clear();
- const bubbles=room.querySelectorAll('[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"], [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]');
- for(const bubble of bubbles){
-  if(bubble.closest('[data-sentry-component="CandidatePanel"]')?.querySelector('[data-testid="message-loading"]'))continue;
-  for(const chat of bubble.querySelectorAll('.chat')){
-   const walker=document.createTreeWalker(chat,NodeFilter.SHOW_TEXT);
-   let node;
-   while((node=walker.nextNode())){
-    if(!node.textContent?.trim())continue;
-    let parent=node.parentElement,excluded=false;
-    while(parent&&parent!==chat){
-     if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable]')){excluded=true;break;}
-     parent=parent.parentElement;
-    }
-    if(excluded)continue;
-    const range=document.createRange();range.selectNodeContents(node);dialogueInk.add(range);
-   }
-  }
- }
-}
 
 function applyOpts(){
  const root=document.documentElement;
@@ -1626,8 +1559,6 @@ function applyOpts(){
  root.classList.toggle('cc-avatar-user-hidden',settings.avatarMode==='userHidden'||settings.avatarMode==='userHiddenHeart');
  root.classList.toggle('cc-avatar-heart',settings.avatarMode==='userHiddenHeart');
  root.classList.toggle('cc-dialogue-highlight',settings.dialogueHighlight===true);
- root.classList.toggle('cc-highlight-fallback',!dialogueHighlightSupported);
- root.classList.toggle('cc-highlight-webkit',dialogueHighlightWebKit&&settings.dialogueHighlight===true);
  updateDialogueHighlight();
  if(panel)for(const input of panel.querySelectorAll('input[name="cc-avatar-mode"]'))input.checked=input.value===settings.avatarMode;
  const highlightInput=panel?.querySelector('#cc-dialogue-highlight-toggle');
@@ -2141,13 +2072,13 @@ function makeControls(){
  document.body.append(toggle,editShortcut,lineShortcut,panel);applyOpts();updateActionAvailability();
  window.addEventListener('resize',positionControls);
 }
-function stop(){clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dialogueHighlightSupported)CSS.highlights.delete(dialogueHighlightName);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);window.removeEventListener('resize',positionControls);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);window.removeEventListener('resize',positionControls);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
   if(old.fill===null)svg.removeAttribute('fill');else svg.setAttribute('fill',old.fill);
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
- document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight','cc-highlight-fallback','cc-highlight-webkit');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
+ document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
 document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{if(document.querySelector('.cc-meta-date'))schedule();},60000);applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});window[KEY]={stop,version:VERSION,palette:chosenKey};
 })();
