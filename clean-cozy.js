@@ -18,12 +18,13 @@ if(window[KEY]?.stop){
  /* Replace previous instance, including another color of this version. */
 }
 document.getElementById(ID)?.remove();
-const defaults={avatarMode:'both',dialogueHighlight:false};
+const defaults={avatarMode:'both',dialogueHighlight:false,removeNarration:false};
 let settings={...defaults};
 try{
  const saved=JSON.parse(localStorage.getItem(STORE)||'{}');
  const allowed=['both','none','userHidden','userHiddenHeart'];
  settings.avatarMode=allowed.includes(saved.avatarMode)?saved.avatarMode:(saved.avatar===false?'none':'both');
+ settings.removeNarration=saved.removeNarration===true;
  // Start with dialogue highlighting OFF on every fresh load, regardless of older stored preferences.
  settings.dialogueHighlight=false;
 }catch(e){}
@@ -2018,12 +2019,45 @@ function compactMarkdown(raw){
  }
  return output;
 }
+/* Optional narration removal used ONLY by the manual line-format button.
+   A narrator section starts with @: at the beginning of a line and ends at
+   the next @speaker: marker. Every fenced code block, including InfoBox, is
+   kept exactly as supplied. Never touch the text automatically on message load. */
+function removeNarrationSections(raw){
+ const lines=String(raw).split(/(?<=\n)/);
+ let inNarration=false;
+ let fence=null;
+ let output='';
+ for(const line of lines){
+  const body=line.replace(/\r?\n$/,'');
+  const fenceMatch=body.match(/^[ \t]*(`{3,})/);
+  if(fence){
+   output+=line;
+   if(fenceMatch && fenceMatch[1].length>=fence.length &&
+      new RegExp('^[ \\t]*`{'+fence.length+',}[ \\t]*$').test(body))fence=null;
+   continue;
+  }
+  if(fenceMatch){
+   fence=fenceMatch[1];
+   output+=line;
+   continue;
+  }
+  if(/^[ \t]*@[ \t]*:[ \t]*/.test(body)){
+   inNarration=true;
+   continue;
+  }
+  if(/^[ \t]*@[^:\r\n]+:[ \t]*/.test(body))inNarration=false;
+  if(!inNarration)output+=line;
+ }
+ return output;
+}
 let lineEditPending=false;
 let lineEditExpiresAt=0;
 let lineEditOpenTimer=null;
 function formatEditTextarea(textarea){
  if(!textarea)return false;
- const formatted=compactMarkdown(textarea.value);
+ const raw=settings.removeNarration?removeNarrationSections(textarea.value):textarea.value;
+ const formatted=compactMarkdown(raw);
  if(formatted!==textarea.value){
   const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;
   if(setter)setter.call(textarea,formatted);
@@ -2149,6 +2183,12 @@ function makeControls(){
  highlightCheckbox.addEventListener('change',()=>{settings.dialogueHighlight=highlightCheckbox.checked;save();applyOpts();});
  const highlightText=document.createElement('span');highlightText.textContent='대사 형광펜';
  highlightLabel.append(highlightCheckbox,highlightText);panel.appendChild(highlightLabel);
+ const narrationTitle=document.createElement('div');narrationTitle.className='cc-section-title';narrationTitle.textContent='줄바꿈 정리';panel.appendChild(narrationTitle);
+ const narrationLabel=document.createElement('label');narrationLabel.className='cc-avatar-option';narrationLabel.setAttribute('for','cc-remove-narration-toggle');
+ const narrationCheckbox=document.createElement('input');narrationCheckbox.id='cc-remove-narration-toggle';narrationCheckbox.type='checkbox';narrationCheckbox.checked=settings.removeNarration===true;
+ narrationCheckbox.addEventListener('change',()=>{settings.removeNarration=narrationCheckbox.checked;save();});
+ const narrationText=document.createElement('span');narrationText.textContent='나레이션 삭제 (@:)';
+ narrationLabel.append(narrationCheckbox,narrationText);panel.appendChild(narrationLabel);
  const section=document.createElement('div');section.className='cc-section-title';section.textContent='채팅 도구';panel.appendChild(section);
  const list=document.createElement('div');list.className='cc-action-list';
  for(const [key,title] of actions){
