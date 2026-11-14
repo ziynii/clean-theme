@@ -1536,9 +1536,13 @@ function updateDialogueHighlight(){
    '[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"] .chat'
   );
   for(const chat of chats){
-   // Candidate text can be incomplete while the model is typing.
-   const candidate=chat.closest('[data-sentry-component="CandidatePanel"]');
-   if(candidate?.querySelector('[data-testid="message-loading"]'))continue;
+   // Loading indicators in a *different* Swiper slide must not block
+   // completed dialogue in this slide. Zeta keeps the next-slide spinner
+   // mounted even after the visible candidate has finished rendering.
+   const slide=chat.closest('.swiper-slide');
+   if(slide?.querySelector('[data-testid="message-loading"]'))continue;
+   // Outside a carousel, skip a chat only when its own BodyView is loading.
+   if(!slide && chat.closest('[data-sentry-component="BodyView"]')?.querySelector('[data-testid="message-loading"]'))continue;
    const walker=document.createTreeWalker(chat,NodeFilter.SHOW_TEXT);
    const nodes=[];
    let node;
