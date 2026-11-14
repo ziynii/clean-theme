@@ -1528,6 +1528,20 @@ html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTe
   color:#747981!important;
 }
 
+/* Info box spacing: compact-but-readable 2~3 step gaps. */
+[data-sentry-component="InfoBoxExpandedContent"]{
+  row-gap:12px!important;
+}
+[data-sentry-component="InfoBoxExpandedContent"] > [data-sentry-component="InfoBoxContent"],
+[data-sentry-component="InfoBoxExpandedContent"] > [data-sentry-component="InfoBoxCharacterSection"]{
+  row-gap:10px!important;
+}
+/* Keep a clearly visible blank line between a message and the info box.
+   The line-formatting button edits message text, not this separately rendered widget. */
+[data-sentry-component="InfoBoxContent"].mx-2.my-3{
+  margin-top:1.5em!important;
+}
+
 `;
 (document.head||document.documentElement).appendChild(style);
 let panel=null,toggle=null,editShortcut=null,observer=null,scheduled=false;
