@@ -1393,10 +1393,14 @@ html.cc-avatar-user-hidden [data-sentry-component="RightTextContent"] > div{marg
 
 /* One consistent inline text highlight on desktop and mobile.
    Dialogue-only spans sit with the text, so there is no overlay or scrolling lag. */
-html.cc-dialogue-highlight .cc-dialogue-inline{
- background-image:linear-gradient(to bottom,transparent 66%,rgba(${accentRgb},.34) 66%,rgba(${accentRgb},.34) 91%,transparent 91%)!important;
+html.cc-dialogue-highlight [data-sentry-component="ChatBubbleContainer"] .chat span.cc-dialogue-inline{
+ background-image:linear-gradient(to bottom,transparent 62%,rgba(${accentRgb},.42) 62%,rgba(${accentRgb},.42) 90%,transparent 90%)!important;
  background-repeat:repeat!important;
  -webkit-box-decoration-break:clone;box-decoration-break:clone;
+ text-decoration:none!important;
+}
+html:not(.cc-dialogue-highlight) [data-sentry-component="ChatBubbleContainer"] .chat span.cc-dialogue-inline{
+ background-image:none!important;background-color:transparent!important;
  text-decoration:none!important;
 }
 /* V32: pastel user bubble wins over inherited gray overrides */
@@ -1509,48 +1513,53 @@ function makeSendArrow(){
 const actionButtons=new Map();
 const marked=new Set();
 function save(){try{localStorage.setItem(STORE,JSON.stringify(settings));}catch(e){}}
-/* Unified desktop/mobile dialogue highlight. No overlay coordinates, no Custom Highlight API. */
+/* Reliable inline dialogue highlighting for desktop and mobile.
+   Keep the inline spans mounted when toggled off. CSS alone controls visibility.
+   This avoids a remove/re-wrap race when Zeta re-renders its messages. */
 const dialogueInlineClass='cc-dialogue-inline';
+let dialogueUpdating=false;
 function clearInlineDialogue(){
  const spans=document.querySelectorAll('span.'+dialogueInlineClass);
  for(const span of spans){
   if(!span.isConnected)continue;
-  // Preserve original text nodes so re-enabling can wrap them again.
   span.replaceWith(...Array.from(span.childNodes));
  }
 }
 function updateDialogueHighlight(){
- if(!settings.dialogueHighlight){
-  clearInlineDialogue();
-  return;
- }
+ if(!settings.dialogueHighlight || dialogueUpdating)return;
  const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
  if(!room)return;
- const bubbles=room.querySelectorAll('[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"], [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]');
- for(const bubble of bubbles){
-  // Do not decorate partially generated candidate messages.
-  if(bubble.closest('[data-sentry-component="CandidatePanel"]')?.querySelector('[data-testid="message-loading"]'))continue;
-  for(const chat of bubble.querySelectorAll('.chat')){
+ dialogueUpdating=true;
+ try{
+  const chats=room.querySelectorAll(
+   '[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"] .chat,'+
+   '[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"] .chat'
+  );
+  for(const chat of chats){
+   // Candidate text can be incomplete while the model is typing.
+   const candidate=chat.closest('[data-sentry-component="CandidatePanel"]');
+   if(candidate?.querySelector('[data-testid="message-loading"]'))continue;
    const walker=document.createTreeWalker(chat,NodeFilter.SHOW_TEXT);
-   const nodes=[];let node;
+   const nodes=[];
+   let node;
    while((node=walker.nextNode())){
-    if(!node.textContent?.trim())continue;
-    let parent=node.parentElement,excluded=false;
-    while(parent&&parent!==chat){
-     if(parent.matches('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable],.'+dialogueInlineClass)){
-      excluded=true;break;
-     }
-     parent=parent.parentElement;
-    }
-    if(!excluded)nodes.push(node);
+    if(!node.nodeValue?.trim())continue;
+    const parent=node.parentElement;
+    if(!parent || parent.closest('em,i,blockquote,.cc-letter,.cc-letter-meta,[contenteditable],.'+dialogueInlineClass))continue;
+    // Exclude labels or metadata added by the theme.
+    if(parent.closest('.cc-meta,.cc-meta-date,.cc-letter-time'))continue;
+    nodes.push(node);
    }
    for(const textNode of nodes){
-    if(!textNode.isConnected||textNode.parentElement?.closest('.'+dialogueInlineClass))continue;
-    const span=document.createElement('span');span.className=dialogueInlineClass;
-    textNode.replaceWith(span);span.appendChild(textNode);
+    if(!textNode.isConnected || textNode.parentElement?.closest('.'+dialogueInlineClass))continue;
+    const span=document.createElement('span');
+    span.className=dialogueInlineClass;
+    textNode.parentNode.insertBefore(span,textNode);
+    span.appendChild(textNode);
    }
   }
- }
+ }catch(error){console.warn('[Clean Cozy] 형광펜 적용 중 오류',error);}
+ finally{dialogueUpdating=false;}
 }
 
 function applyOpts(){
