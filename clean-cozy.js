@@ -25,8 +25,8 @@ try{
  const allowed=['both','none','userHidden','userHiddenHeart'];
  settings.avatarMode=allowed.includes(saved.avatarMode)?saved.avatarMode:(saved.avatar===false?'none':'both');
  settings.removeNarration=saved.removeNarration===true;
- // Start with dialogue highlighting OFF on every fresh load, regardless of older stored preferences.
- settings.dialogueHighlight=false;
+ // Restore the user's last explicit choice. First-time default remains OFF.
+ settings.dialogueHighlight=saved.dialogueHighlight===true;
 }catch(e){}
 const style=document.createElement('style');
 style.id=ID;
