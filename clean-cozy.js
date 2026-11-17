@@ -1,17 +1,161 @@
+/*
+ * Clean Cozy · Pastel Collection
+ * Published build: v1.7.1
+ * Loader target: https://clean-theme-js.netlify.app/clean-cozy.js
+ * DOM/CSS client-side customization only.
+ */
+
 (function(){const keys=['gray','pink','yellow','blue','green','purple'];const last=window.__ccLastPalette;const list=keys.filter(x=>x!==last);const pick=list[Math.floor(Math.random()*list.length)];window.__ccLastPalette=pick;window.__ccNextPalette=pick;})();
 (()=>{
 'use strict';
 const ID='zeta-clean-cozy-v41';
-const VERSION=41;
+const VERSION=46;
 const PALETTES={"gray":{"ko":"그레이","bg":"#F7F7F8","user":"#F1F1F3","accent":"#A7ABB1","strong":"#4B5057","soft":"#EEEFF1","hover":"#E3E5E8","stroke":"#E1E3E6","icon":"#737780","scroll":"#C8CBD0","alt":"#FAFAFB"},"pink":{"ko":"연핑크","bg":"#FCF8FA","user":"#F8EDF1","accent":"#D8B7C5","strong":"#8D6576","soft":"#F7EDF2","hover":"#F0E1E8","stroke":"#EEDFE5","icon":"#9B7B88","scroll":"#DFC9D2","alt":"#FFFBFC"},"yellow":{"ko":"연노랑","bg":"#FCFBF5","user":"#F9F4E3","accent":"#D8C89A","strong":"#8B7951","soft":"#F7F3E5","hover":"#F0EAD7","stroke":"#EBE5D1","icon":"#98855D","scroll":"#DDD4B6","alt":"#FFFEF9"},"blue":{"ko":"연파랑","bg":"#F7FAFD","user":"#ECF3FA","accent":"#B3CDE3","strong":"#587B9B","soft":"#EDF4FA","hover":"#E1EDF7","stroke":"#DDE9F2","icon":"#7895AE","scroll":"#C8D9E8","alt":"#FBFDFF"},"green":{"ko":"연두","bg":"#F8FBF7","user":"#EFF6EA","accent":"#BED3B2","strong":"#6B8961","soft":"#F0F7EC","hover":"#E4EFE0","stroke":"#DFEADD","icon":"#81997B","scroll":"#CDDCC7","alt":"#FBFDFB"},"purple":{"ko":"연보라","bg":"#FAF8FD","user":"#F2EDFA","accent":"#C9B9E1","strong":"#7E6A9C","soft":"#F3EEFA","hover":"#EAE2F5","stroke":"#E7E0EF","icon":"#9485AB","scroll":"#D7CBE5","alt":"#FDFBFF"}};
 const chosen=window.__ccNextPalette;
 try{delete window.__ccNextPalette;}catch(e){}
 const chosenKey=PALETTES[chosen]?chosen:'gray';
 const palette=PALETTES[chosenKey];
 const accentRgb=[1,3,5].map(i=>parseInt(palette.accent.slice(i,i+2),16)).join(',');
+const FRAME_CHAT=location.hostname==='frame.pingpong.ai';
+// Parent and scene are separate documents. Keep the original parent styles,
+// but never render chat-only floating controls in the outer room host.
+const OUTER_ROOM=!FRAME_CHAT && /^\/(?:[a-z]{2}(?:-[A-Z]{2})?\/)?rooms\/[^/]+/.test(location.pathname);
+// Cross-origin coordination between our own two userscript instances only.
+// No access to the other frame's DOM, Zeta data, or internal APIs.
+let ccFrameReadyAnnounced=false;
+function announceFrameControls(){
+ if(!FRAME_CHAT||ccFrameReadyAnnounced)return;
+ if(!document.body?.classList.contains('cc-frame-chat-root'))return;
+ const button=document.getElementById('cc-toggle');
+ if(!button||!button.isConnected)return;
+ ccFrameReadyAnnounced=true;
+ try{window.parent.postMessage({type:'clean-cozy-frame-controls-ready-v163'},'https://zeta-ai.io');}catch(e){}
+}
+function onCozyFrameReady(event){
+ if(!OUTER_ROOM||event.origin!=='https://frame.pingpong.ai')return;
+ if(event.data?.type!=='clean-cozy-frame-controls-ready-v163')return;
+ const scene=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
+ if(!scene||event.source!==scene.contentWindow)return;
+ sendToCozyScene('settings',settings);document.documentElement.classList.add('cc-inner-controls-ready');
+}
+if(OUTER_ROOM)window.addEventListener('message',onCozyFrameReady);
+function sendToCozyScene(type, payload){
+ if(!OUTER_ROOM)return false;
+ const frame=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
+ if(!frame?.contentWindow)return false;
+ try{frame.contentWindow.postMessage({type:'cc-private-ui-v164',command:type,payload},'https://frame.pingpong.ai');return true;}catch(e){return false;}
+}
+function receiveCozyUIMessage(event){
+ if(!FRAME_CHAT||event.origin!=='https://zeta-ai.io'||event.source!==window.parent)return;
+ const data=event.data;
+ if(!data||data.type!=='cc-private-ui-v164')return;
+ if(data.command==='edit'){nativeEditButton()?.click();}
+ else if(data.command==='line'){pressLineTool();}
+ else if(data.command==='action'&&['snapshot','report','request','regen','suggest'].includes(data.payload)){
+  availableNativeAction(data.payload)?.click();
+ }else if(data.command==='settings'&&data.payload&&typeof data.payload==='object'){
+  const p=data.payload;
+  if(['both','none','userHidden','userHiddenHeart'].includes(p.avatarMode))settings.avatarMode=p.avatarMode;
+  if(typeof p.dialogueHighlight==='boolean')settings.dialogueHighlight=p.dialogueHighlight;
+  if(typeof p.removeNarration==='boolean')settings.removeNarration=p.removeNarration;
+  save();applyOpts();
+ }
+}
+if(FRAME_CHAT)window.addEventListener('message',receiveCozyUIMessage);
+
+// A parent fallback may show before iframe controls are ready. Do not leave
+// a misleading, non-functional settings panel on the outer document.
+
+
+
+// The outer Zeta page and the scene iframe have separate documents and origins.
+// Mark only a visible chat subtree once Zeta has actually rendered chat elements.
+function markFrameChatRoot(){
+ if(!FRAME_CHAT)return;
+ const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
+ if(!log)return;
+ const root=document.body;
+ if(!root.classList.contains('cc-frame-chat-root'))root.classList.add('cc-frame-chat-root');
+ // Read only the rendered DOM. Do not access network, framework state, or APIs.
+ const header=document.querySelector('header');
+ if(header&&!header.hasAttribute('data-sentry-component'))header.setAttribute('data-sentry-component','Header');
+ const composer=document.querySelector('[data-testid="composer-input-box"]');
+ const composerDock=composer?.closest('[class*="bg-linear-to-b"]');
+ if(composerDock&&!composerDock.hasAttribute('data-sentry-component'))composerDock.setAttribute('data-sentry-component','ChatComposer');
+ // Old Zeta exposed named sentry wrappers. New Zeta renders left/right rows directly.
+ for(const row of log.querySelectorAll('div.flex.flex-row.items-start')){
+  const cls=row.classList;
+  const isUser=cls.contains('ml-auto')&&cls.contains('pr-2');
+  const isCharacter=cls.contains('pl-2')&&cls.contains('pr-[72px]');
+  if(!isUser&&!isCharacter)continue;
+  const bubble=[...row.querySelectorAll('div')].find(el=>
+   el.classList.contains('w-fit')&&el.classList.contains('flex-col')&&
+   (el.classList.contains('rounded-r-xl')||el.classList.contains('rounded-l-xl')));
+  if(!bubble)continue;
+  const role=isUser?'RightTextContent':'LeftTextContent';
+  if(row.getAttribute('data-sentry-component')!==role)row.setAttribute('data-sentry-component',role);
+  if(!bubble.hasAttribute('data-sentry-component'))bubble.setAttribute('data-sentry-component','ChatBubbleContainer');
+  // Leave Zeta's own text tree alone. Map only a direct content wrapper if present.
+  const textChild=[...bubble.children].find(el=>el.classList.contains('chat'));
+  if(!textChild && bubble.children.length===1 && bubble.firstElementChild && !bubble.firstElementChild.classList.contains('cc-meta') && !bubble.firstElementChild.classList.contains('chat')) {
+   const target=bubble.firstElementChild;
+   // Only mark a markup container, never an interactive control.
+   if(!/^(BUTTON|TEXTAREA|INPUT)$/.test(target.tagName))target.classList.add('chat');
+  }
+ }
+}
+// New scene markup does not expose the previous .caption1 name labels.
+// Find a short label adjacent to the bubble without reading its message text.
+function frameNameLabel(body){
+ if(!FRAME_CHAT)return null;
+ const stack=body.querySelector(':scope > .flex.min-w-0.flex-col.gap-1')||
+  [...body.children].find(el=>el.classList?.contains('flex-col')&&el.classList?.contains('gap-1'));
+ if(!stack)return null;
+ for(const child of stack.children){
+  if(child.querySelector('[data-sentry-component="ChatBubbleContainer"]'))continue;
+  if(child.classList.contains('relative'))continue;
+  const candidates=[child,...child.querySelectorAll('span,div')];
+  for(const node of candidates){
+   if(node.querySelector('button,textarea,img,[role="log"]'))continue;
+   const value=(node.textContent||'').trim();
+   if(!value||value.length>28||value.includes('\n'))continue;
+   if(/^(오후|오전|\d{1,2}:\d{2}|today|\d+ day)/i.test(value))continue;
+   return node;
+  }
+ }
+ return null;
+}
+function frameName(body){
+ const label=frameNameLabel(body);
+ if(label)return label.textContent.trim();
+ const image=body.querySelector(':scope > button img[alt]');
+ const avatar=image?.getAttribute('alt')?.trim();
+ if(avatar&&avatar.length<30)return avatar;
+ if(body.matches('[data-sentry-component="RightTextContent"]'))return '유저';
+ return document.querySelector('[data-testid="chat-header-profile"]')?.textContent?.trim().slice(0,28)||'캐릭터';
+}
+let frameNativeEditButton=null;
+function nativeEditButton(){
+ if(FRAME_CHAT && frameNativeEditButton?.isConnected && !frameNativeEditButton.disabled)return frameNativeEditButton;
+ const options=[
+  '[data-sentry-component="LastMessageControlBar"] button[aria-label="Edit message"]',
+  'button[data-testid="edit-button"]',
+  'button[aria-label="Edit message"]',
+  'button[aria-label="메시지 수정"]',
+  'button[title="Edit message"]',
+  'button[title="메시지 수정"]'
+ ];
+ for(const selector of options){
+  const candidates=[...document.querySelectorAll(selector)].filter(x=>x.id!=='cc-edit-shortcut'&&x.id!=='cc-line-shortcut');
+  const found=candidates.find(el=>!el.disabled);
+  if(found)return found;
+ }
+ if(FRAME_CHAT){markFrameNativeTools();if(frameNativeEditButton?.isConnected&&!frameNativeEditButton.disabled)return frameNativeEditButton;}
+ return null;
+}
 const KEY='__zetaCleanCozy';
 const STORE='zeta-clean-cozy-options-v1';
-if(!/(^|\.)zeta-ai\.io$/.test(location.hostname)) { alert('제타에서 실행해 줘!'); return; }
+if(!/(^|\.)(?:zeta-ai\.io|pingpong\.ai)$/.test(location.hostname)) return;
 if(window[KEY]?.stop){
  const previous=window[KEY];
  previous.stop();
@@ -37,10 +181,10 @@ header[data-sentry-component="Header"]{background:rgba(255,255,255,.94)!importan
 header[data-sentry-component="Header"] :is(span,svg){color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important}
 header[data-sentry-component="Header"] [data-testid="chat-header-model"]{background:#F4F4F4!important;border:1px solid var(--cc-stroke)!important}
 header[data-sentry-component="Header"] [data-testid="chat-header-model"] svg{color:#6D7276!important}
-[data-sentry-component="ChatRoomReadyView"],
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root),
 [role="log"][aria-label="Chat messages"]{background:#FFFFFF!important;background-image:none!important}
-[data-sentry-component="ChatRoomReadyView"]>div:first-child,
-[data-sentry-component="ChatRoomReadyView"]>div[aria-hidden="true"]{background:rgba(255,255,255,.94)!important;background-image:none!important}
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)>div:first-child,
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)>div[aria-hidden="true"]{background:rgba(255,255,255,.94)!important;background-image:none!important}
 [data-sentry-component="LeftTextContent"], [data-sentry-component="RightTextContent"],
 [data-sentry-component="LeftTextContent"]>div,[data-sentry-component="RightTextContent"]>div{background:transparent!important;background-image:none!important}
 [data-sentry-component="LeftTextContent"] .caption1,[data-sentry-component="RightTextContent"] .caption1{color:var(--cc-muted)!important}
@@ -61,13 +205,13 @@ header[data-sentry-component="Header"] [data-testid="chat-header-model"] svg{col
  border-radius:10px!important;
 }
 /* 채팅방 상단: 이름을 정확히 중앙에, 모델 선택 버튼 숨김 */
-body:has([data-sentry-component="ChatRoomReadyView"]) header[data-sentry-component="Header"] nav{
+body:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)) header[data-sentry-component="Header"] nav{
  position:relative!important;
 }
-body:has([data-sentry-component="ChatRoomReadyView"]) header[data-sentry-component="Header"] [data-testid="chat-header-model"]{
+body:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)) header[data-sentry-component="Header"] [data-testid="chat-header-model"]{
  display:none!important;
 }
-body:has([data-sentry-component="ChatRoomReadyView"]) header[data-sentry-component="Header"] [data-testid="chat-header-profile"]{
+body:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)) header[data-sentry-component="Header"] [data-testid="chat-header-profile"]{
  position:absolute!important;
  left:50%!important;
  top:50%!important;
@@ -80,10 +224,10 @@ body:has([data-sentry-component="ChatRoomReadyView"]) header[data-sentry-compone
  text-align:center!important;
  z-index:1!important;
 }
-body:has([data-sentry-component="ChatRoomReadyView"]) header[data-sentry-component="Header"] [data-testid="chat-header-profile"] span{
+body:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)) header[data-sentry-component="Header"] [data-testid="chat-header-profile"] span{
  text-align:center!important;
 }
-body:has([data-sentry-component="ChatRoomReadyView"]) header[data-sentry-component="Header"] nav > div:last-child{
+body:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)) header[data-sentry-component="Header"] nav > div:last-child{
  margin-left:auto!important;
  z-index:2!important;
 }
@@ -256,16 +400,16 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
 .cc-meta{margin-bottom:5px!important;}
 /* Visually gentle scrollbar without changing the scroll behavior */
 [role="log"][aria-label="Chat messages"],
-[data-sentry-component="ChatRoomReadyView"] [class*="overflow-y-auto"]{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [class*="overflow-y-auto"]{
   scrollbar-width:thin!important;
   scrollbar-color:rgba(140,145,150,.25) transparent!important;
 }
 [role="log"][aria-label="Chat messages"]::-webkit-scrollbar,
-[data-sentry-component="ChatRoomReadyView"] [class*="overflow-y-auto"]::-webkit-scrollbar{width:4px!important;}
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [class*="overflow-y-auto"]::-webkit-scrollbar{width:4px!important;}
 [role="log"][aria-label="Chat messages"]::-webkit-scrollbar-track,
-[data-sentry-component="ChatRoomReadyView"] [class*="overflow-y-auto"]::-webkit-scrollbar-track{background:transparent!important;}
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [class*="overflow-y-auto"]::-webkit-scrollbar-track{background:transparent!important;}
 [role="log"][aria-label="Chat messages"]::-webkit-scrollbar-thumb,
-[data-sentry-component="ChatRoomReadyView"] [class*="overflow-y-auto"]::-webkit-scrollbar-thumb{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [class*="overflow-y-auto"]::-webkit-scrollbar-thumb{
  background:rgba(145,149,153,.26)!important;border-radius:8px!important;
 }
 /* Settings button stays in one place, regardless of whether jump-to-latest is shown */
@@ -856,8 +1000,8 @@ html::-webkit-scrollbar-thumb,body::-webkit-scrollbar-thumb,body *::-webkit-scro
  color:#FFFFFF!important;
 }
 /* Ensure settings cog does not float over cards on non-chat pages. */
-body:not(:has([data-sentry-component="ChatRoomReadyView"])) #cc-toggle,
-body:not(:has([data-sentry-component="ChatRoomReadyView"])) #cc-panel{display:none!important;}
+body:not(:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root))) #cc-toggle,
+body:not(:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root))) #cc-panel{display:none!important;}
 
 
 /* V11: Exact container for home feed tabs */
@@ -1185,33 +1329,33 @@ svg[data-sentry-source-file="NarratorBubble.tsx"][data-sentry-element="TextIcon"
 }
 
 /* V20 — quieter typography and measured spacing, retaining existing colors */
-[data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"]){
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"]){
  padding-top:6px!important;padding-bottom:6px!important;
 }
-[data-sentry-component="ChatRoomReadyView"] [data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"]{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"]{
  max-width:min(410px,100%)!important;
  padding:7px 10px 8px!important;
 }
-[data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]{
  max-width:min(380px,100%)!important;
  padding:11px 13px!important;
 }
-[data-sentry-component="ChatRoomReadyView"] .cc-meta{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) .cc-meta{
  gap:5px!important;margin-bottom:6px!important;line-height:1.4!important;
 }
-[data-sentry-component="ChatRoomReadyView"] .cc-meta-name{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) .cc-meta-name{
  font-size:13px!important;font-weight:600!important;letter-spacing:-.018em!important;
  color:#303238!important;-webkit-text-fill-color:#303238!important;
 }
-[data-sentry-component="ChatRoomReadyView"] .cc-meta-date{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) .cc-meta-date{
  font-size:11px!important;font-weight:400!important;line-height:1.4!important;
  letter-spacing:-.01em!important;color:#A0A3A9!important;
  -webkit-text-fill-color:#A0A3A9!important;
 }
-[data-sentry-component="ChatRoomReadyView"] [data-sentry-component="ChatBubbleContainer"] .chat :is(em,i){
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="ChatBubbleContainer"] .chat :is(em,i){
  color:#858A91!important;-webkit-text-fill-color:#858A91!important;
 }
-[data-sentry-component="ChatRoomReadyView"] [data-sentry-component="ChatBubbleContainer"] .chat p+p{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="ChatBubbleContainer"] .chat p+p{
  margin-top:7px!important;
 }
 
@@ -1320,7 +1464,7 @@ svg[data-sentry-source-file="NarratorBubble.tsx"][data-sentry-element="TextIcon"
 }
 #cc-edit-shortcut:hover:not(:disabled){background:#F1F2F4!important;}
 #cc-edit-shortcut:disabled{opacity:.46!important;cursor:default!important;}
-body:not(:has([data-sentry-component="ChatRoomReadyView"])) #cc-edit-shortcut{display:none!important;}
+body:not(:has(:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root))) #cc-edit-shortcut{display:none!important;}
 #cc-panel{bottom:208px!important;}
 
 
@@ -1348,7 +1492,7 @@ html.cc-avatar-heart [data-sentry-component="LeftTextContent"] > button.shrink-0
  -webkit-mask-size:19px 19px!important;mask-size:19px 19px!important;
 }
 /* Keep avatar visually aligned with the top of the message body. */
-[data-sentry-component="ChatRoomReadyView"] [data-sentry-component="LeftTextContent"] > button.shrink-0{
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"] > button.shrink-0{
  transform:translateY(5px)!important;
 }
 html.cc-avatar-user-hidden [data-sentry-component="RightTextContent"] > div{margin-left:auto!important;}
@@ -1406,12 +1550,12 @@ html:not(.cc-dialogue-highlight) [data-sentry-component="ChatBubbleContainer"] .
 }
 /* V32: pastel user bubble wins over inherited gray overrides */
 html [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"],
-html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]{
+html :is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]{
  background:var(--cc-user)!important;background-image:none!important;
  border-color:var(--cc-stroke)!important;
 }
 /* V34: hide native small Zeta watermark next to character bubbles only. */
-[data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="ZetaWatermarkRaw"],[data-sentry-component="ZetaWatermarkEditedRaw"]){display:none!important;}
+:is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) :is([data-sentry-component="ZetaWatermarkRaw"],[data-sentry-component="ZetaWatermarkEditedRaw"]){display:none!important;}
 /* V32: third floating tool sits 44px above edit */
 #cc-line-shortcut{position:fixed!important;right:8px!important;bottom:208px!important;z-index:2147483000!important;
  width:32px!important;height:32px!important;min-height:32px!important;min-width:32px!important;
@@ -1434,7 +1578,7 @@ html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTe
 [data-sentry-component="PlayerCharacterSelect"] [data-sentry-component="PlotProfileCard"] button[aria-label="Edit chat profile"] svg{color:var(--cc-icon)!important;}
 [data-sentry-component="PlayerCharacterSelect"] [data-sentry-component="PlotProfileCard"] button:not([aria-label]){background:var(--cc-user)!important;border:1px solid var(--cc-stroke)!important;color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important;}
 [data-sentry-component="PlayerCharacterSelect"] [data-sentry-component="PlotProfileCard"] button:not([aria-label]):active{background:var(--cc-accent-hover)!important;}
-[data-sentry-component="PlayerCharacterSelect"] [role="group"][aria-label="My chat profiles"]{background:#fff!important;border:1px solid var(--cc-stroke)!important;border-radius:12px!important;}
+[data-sentry-component="PlayerCharacterSelect"] [role="group"][aria-label="My chat profiles"]{background:#fff!important;border:0!important;border-radius:12px!important;}
 [data-sentry-component="PlayerCharacterSelect"] [role="group"][aria-label="My chat profiles"] button{color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important;border-color:var(--cc-stroke)!important;}
 [data-sentry-component="PlayerCharacterSelect"] [role="group"][aria-label="My chat profiles"] button:active{background:var(--cc-accent-soft)!important;}
 [data-sentry-component="PlayerCharacterSelect"] [role="group"][aria-label="My chat profiles"] span{color:var(--cc-muted)!important;-webkit-text-fill-color:var(--cc-muted)!important;}
@@ -1539,7 +1683,283 @@ html [data-sentry-component="ChatRoomReadyView"] [data-sentry-component="RightTe
 }
 
 `;
+// Target only the new scene document, using diagnostic-confirmed structure.
+if(FRAME_CHAT)style.textContent+=`
+
+html,body,body.cc-frame-chat-root{background:var(--cc-bg)!important;color:var(--cc-text)!important}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{background:#fff!important}
+body.cc-frame-chat-root header{background:rgba(255,255,255,.96)!important;border-bottom:1px solid var(--cc-stroke)!important;color:var(--cc-text)!important}
+body.cc-frame-chat-root header :is(button,span,svg){color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important}
+body.cc-frame-chat-root header [data-testid="chat-header-model"]{display:none!important}
+body.cc-frame-chat-root header nav{position:relative!important}
+body.cc-frame-chat-root header [data-testid="chat-header-profile"]{position:absolute!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;max-width:calc(100% - 140px)!important;width:max-content!important;flex:none!important;text-align:center!important;justify-content:center!important}
+body.cc-frame-chat-root header [data-testid="chat-header-profile"] :is(span,div){text-align:center!important}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"]{background:#fff!important;color:var(--cc-text)!important;border:0!important;border-radius:18px!important;box-shadow:none!important;max-width:min(612px,100%)!important}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]{background:var(--cc-user)!important;color:var(--cc-text)!important;border:1px solid var(--cc-stroke)!important;border-radius:11px!important;box-shadow:none!important;max-width:min(612px,100%)!important}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] :is(p,span,div){color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] :is(em,i){color:#96999D!important;-webkit-text-fill-color:#96999D!important;font-style:italic!important}
+/* New iframe InfoBox: exact live DOM structure, light card treatment. */
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold){
+ background:#FFFFFF!important;background-image:none!important;
+ border:0!important;border-radius:12px!important;
+ box-shadow:none!important;
+ color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) > button{
+ color:var(--cc-icon)!important;background:transparent!important;
+}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) > button svg{
+ color:var(--cc-icon)!important;-webkit-text-fill-color:var(--cc-icon)!important;
+}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) .chat,
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) .chat span{
+ color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important;opacity:1!important;
+}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) .chat .font-bold{
+ color:#34383E!important;-webkit-text-fill-color:#34383E!important;font-weight:650!important;
+}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) .chat [class*="text-white/70"]{
+ color:#737981!important;-webkit-text-fill-color:#737981!important;opacity:1!important;
+}
+body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+ div.mx-2.my-3.flex.flex-row.items-start.rounded-12.bg-gray-main.py-2:has(.chat .font-bold) .caption1{
+ color:var(--cc-accent-strong)!important;-webkit-text-fill-color:var(--cc-accent-strong)!important;opacity:1!important;
+}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] blockquote{background:var(--cc-panel-alt)!important;color:var(--cc-text)!important;border-color:var(--cc-stroke)!important}
+body.cc-frame-chat-root [data-testid="composer-input-box"]{background:rgba(255,255,255,.96)!important;border:1px solid var(--cc-stroke)!important;border-radius:20px!important;color:var(--cc-text)!important;box-shadow:0 4px 14px #0000000a!important}
+body.cc-frame-chat-root [data-testid="composer-input-box"] textarea{background:transparent!important;color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important;caret-color:var(--cc-accent-strong)!important}
+body.cc-frame-chat-root [data-testid="composer-input-box"] textarea::placeholder{color:var(--cc-muted)!important;-webkit-text-fill-color:var(--cc-muted)!important}
+body.cc-frame-chat-root [data-sentry-component="ChatComposer"]{background:transparent!important;background-image:none!important;--tw-gradient-from:transparent!important;--tw-gradient-to:transparent!important}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="LeftTextContent"]>button.shrink-0,body.cc-frame-chat-root [role="log"] [data-sentry-component="RightTextContent"]>button.shrink-0{flex-shrink:0!important}
+html.cc-tools-ready body.cc-frame-chat-root #cc-edit-shortcut:disabled,html.cc-tools-ready body.cc-frame-chat-root #cc-line-shortcut:disabled{opacity:.4!important}
+`;
+if(FRAME_CHAT)style.textContent+=`
+/* Scene-specific patches verified against the user's diagnostic DOM structure. */
+body.cc-frame-chat-root [role="log"] .message-context-menu-trigger.bg-gray-main{
+ background:#fff!important;background-image:none!important;color:#8C9097!important;
+ border:1px dashed #D4D7DC!important;border-radius:13px!important;
+ box-shadow:none!important;padding:12px 14px!important;
+}
+body.cc-frame-chat-root [role="log"] .message-context-menu-trigger.bg-gray-main :is(p,span,div,em,i){
+ color:#94979E!important;-webkit-text-fill-color:#94979E!important;
+}
+body.cc-frame-chat-root [role="log"] .message-context-menu-trigger.bg-gray-main svg{
+ color:var(--cc-accent-strong)!important;
+}
+/* The scene has no BodyView, so names are attached to directly marked rows. */
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] > .cc-meta{
+ display:flex!important;align-items:baseline!important;margin:0 0 6px!important;
+ color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] .cc-meta-name{
+ font-size:13px!important;font-weight:600!important;color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] .cc-meta-time,
+body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] .cc-meta-date{
+ font-size:11px!important;color:var(--cc-muted)!important;
+}
+body.cc-frame-chat-root #cc-toggle,body.cc-frame-chat-root #cc-edit-shortcut,
+body.cc-frame-chat-root #cc-line-shortcut{z-index:2147483000!important;visibility:visible!important;display:flex!important;}
+body.cc-frame-chat-root #cc-toggle{opacity:1!important;}
+`;
+if(FRAME_CHAT)style.textContent+=`
+/* Extra frame styles based on the live edit panel and suggestions DOM. */
+body.cc-frame-chat-root header,
+body.cc-frame-chat-root header nav,
+body.cc-frame-chat-root header nav > div{background-color:#fff!important;background-image:none!important;}
+body.cc-frame-chat-root header nav{position:relative!important;width:100%!important;min-height:48px!important;}
+/* The profile is centered independently of the left-side back button. */
+body.cc-frame-chat-root header [data-testid="chat-header-profile"]{
+ position:absolute!important;left:50%!important;right:auto!important;top:50%!important;
+ transform:translate(-50%,-50%)!important;margin:0!important;z-index:1!important;
+}
+/* The chat menu remains a native Zeta button; only its visual placement changes. */
+body.cc-frame-chat-root header button[aria-label="Open chat menu"]{
+ position:absolute!important;right:12px!important;left:auto!important;top:50%!important;
+ transform:translateY(-50%)!important;z-index:5!important;
+ color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root header nav > div:has(>button[aria-label="Open chat menu"]){
+ position:static!important;margin-left:auto!important;
+}
+/* Message edit sheet: keep native controls and textarea functional. */
+body.cc-frame-chat-root section:has(textarea[name="message"]){
+ background:#fff!important;color:var(--cc-text)!important;
+ border-color:var(--cc-stroke)!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) > div,
+body.cc-frame-chat-root section:has(textarea[name="message"]) > div > div{
+ background:#fff!important;background-image:none!important;
+ border-color:var(--cc-stroke)!important;color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) textarea[name="message"]{
+ background:#fff!important;color:var(--cc-text)!important;
+ -webkit-text-fill-color:var(--cc-text)!important;caret-color:var(--cc-accent-strong)!important;
+ border:0!important;outline:0!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) [aria-label="Resize edit area"] > div{
+ background:var(--cc-stroke)!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) button[aria-label="Cancel editing"],
+body.cc-frame-chat-root section:has(textarea[name="message"]) button[aria-label="Insert asterisk"]{
+ background:var(--cc-accent-soft)!important;border:1px solid var(--cc-stroke)!important;
+ color:var(--cc-accent-strong)!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) button[aria-label="Save edit"]{
+ background:var(--cc-accent-strong)!important;color:#fff!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) button[aria-label="Save edit"]:disabled{
+ opacity:.4!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) button:is([aria-label="Cancel editing"],[aria-label="Insert asterisk"]) svg{
+ color:var(--cc-accent-strong)!important;
+}
+body.cc-frame-chat-root section:has(textarea[name="message"]) button[aria-label="Save edit"] svg{
+ color:#fff!important;
+}
+/* Suggested response tray and its generated swipe cards. */
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"],
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] > div{
+ background:var(--cc-bg)!important;background-image:none!important;color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] .swiper-slide button{
+ background:var(--cc-user)!important;border:1px solid var(--cc-stroke)!important;
+ box-shadow:none!important;color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] .swiper-slide button :is(p,div,span){
+ color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] .swiper-slide button em{
+ color:#96999D!important;-webkit-text-fill-color:#96999D!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] > div > div:last-child{
+ background:#fff!important;border-color:var(--cc-stroke)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] [data-remain-count] span{
+ color:var(--cc-muted)!important;-webkit-text-fill-color:var(--cc-muted)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] [data-remain-count] span.font-medium{
+ color:var(--cc-text)!important;-webkit-text-fill-color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] button[aria-label="See other suggestions"]{
+ background:var(--cc-accent-soft)!important;color:var(--cc-accent-strong)!important;
+}
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] button[aria-label="See other suggestions"] svg,
+body.cc-frame-chat-root [data-testid="bottom-panel-slot"] button[aria-label="Free usage info"] svg{
+ color:var(--cc-accent-strong)!important;
+}
+/* Old time spans are removed by enhanceDates; don't show one during hydration. */
+body.cc-frame-chat-root .cc-meta > .cc-meta-time{display:none!important;}
+`;
+if(OUTER_ROOM)style.textContent+=`
+/* Parent fallback controls remain visible until the real scene confirms
+   that its own floating buttons exist. The old :has selector otherwise
+   hides the parent settings and edit buttons unconditionally. */
+html:not(.cc-inner-controls-ready) body #cc-toggle,
+html:not(.cc-inner-controls-ready) body #cc-edit-shortcut,
+html:not(.cc-inner-controls-ready) body #cc-line-shortcut{display:flex!important;visibility:visible!important;}
+/* Never hide the genuine inner-frame buttons. Only hide parent duplicates,
+   and ONLY after those frame buttons have confirmed they are present. */
+html.cc-inner-controls-ready #cc-toggle,
+html.cc-inner-controls-ready #cc-edit-shortcut,
+html.cc-inner-controls-ready #cc-line-shortcut,
+html.cc-inner-controls-ready #cc-panel{display:none!important;}
+`;
 (document.head||document.documentElement).appendChild(style);
+if(FRAME_CHAT)style.textContent+=`
+/* Hide ONLY the supplied native bottom bar. All nodes and click handlers stay available. */
+/* This targets the exact gray bar, not the floating Clean Cozy shortcuts. */
+body.cc-frame-chat-root div.flex.flex-row.items-center.gap-1\.5.px-2.py-1:has(>div.ml-auto button[aria-label="Report message"]):has(button[aria-label="Edit message"]):has(button[aria-label="Regenerate answers"]){display:none!important;}
+body.cc-frame-chat-root .cc-native-toolbar-group{display:none!important;}
+
+/* The sidebar floating controls are explicitly preserved. */
+body.cc-frame-chat-root #cc-toggle,
+body.cc-frame-chat-root #cc-edit-shortcut,
+body.cc-frame-chat-root #cc-line-shortcut{display:flex!important;visibility:visible!important;}
+/* Iframe native action strip: preserve DOM and handlers but hide its UI. */
+body.cc-frame-chat-root .cc-native-toolbar-button,
+body.cc-frame-chat-root .cc-native-toolbar-group{display:none!important;}
+/* Always keep our settings control and the open menu above the scene overlay. */
+body.cc-frame-chat-root #cc-panel:not([hidden]){
+ display:block!important;visibility:visible!important;opacity:1!important;
+ pointer-events:auto!important;z-index:2147483646!important;
+ background:#fff!important;color:#292B2D!important;
+}
+body.cc-frame-chat-root #cc-toggle{z-index:2147483645!important;pointer-events:auto!important;}
+/* New scene: hide only Suggested replies. Keep native Insert asterisk + Send. */
+body.cc-frame-chat-root [data-sentry-component="ChatComposer"] button:is([aria-label="Suggested replies"],[aria-label="Get suggestions"],[aria-label="추천 답변"]),
+body.cc-frame-chat-root [data-testid="composer-input-box"] button:is([aria-label="Suggested replies"],[aria-label="Get suggestions"],[aria-label="추천 답변"]) {display:none!important;}
+body.cc-frame-chat-root [data-testid="composer-input-box"] button[aria-label="Insert asterisk"]{
+ display:flex!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;
+}
+/* The native toolbar is mounted outside the chat log and has anonymous icon buttons. */
+body.cc-frame-chat-root .cc-native-toolbar-button,
+body.cc-frame-chat-root .cc-native-toolbar-group,
+body.cc-frame-chat-root .cc-native-snapshot-button {display:none!important;}
+`;
+if(FRAME_CHAT)style.textContent+=`
+/* V46: new iframe chat-profile chooser — exact live portal DOM, light theme only. */
+body.cc-frame-chat-root #portal-container > div:has(section[role="dialog"][aria-label="대화 프로필"]) > div.relative[class*="bg-gray-sub1"]{
+ background:#FFFFFF!important;background-image:none!important;color:var(--cc-text)!important;
+ border-color:transparent!important;box-shadow:none!important;
+}
+body.cc-frame-chat-root #portal-container > div:has(section[role="dialog"][aria-label="대화 프로필"]) > div.relative[class*="bg-gray-sub1"] > div:first-child svg{
+ color:#B8BCC2!important;-webkit-text-fill-color:#B8BCC2!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"]{
+ background:#FFFFFF!important;color:var(--cc-text)!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] h3{
+ color:#737981!important;-webkit-text-fill-color:#737981!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] [class~="bg-white/5"]{
+ background:#FAFAFB!important;background-image:none!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] [class~="bg-white/[8%]"]{
+ background:var(--cc-accent-soft)!important;background-image:none!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] [role="group"][aria-label="My chat profiles"] > div.relative{
+ background:#FAFAFB!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] [role="group"][aria-label="My chat profiles"] > div[class~="bg-white/5"]{
+ background:transparent!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] [role="group"][aria-label="My chat profiles"] > div[class~="bg-white/5"] > .h-px{
+ background:var(--cc-stroke)!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] :is(.body1,.body14,.text-gray-200),
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] button :is(.body1,.body14,.text-gray-200){
+ color:#30343A!important;-webkit-text-fill-color:#30343A!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] :is(.caption1,[class~="text-white/50"]){
+ color:#7A7F86!important;-webkit-text-fill-color:#7A7F86!important;opacity:1!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] button[aria-label^="edit-"] svg{
+ color:#737981!important;-webkit-text-fill-color:#737981!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] button:active{
+ background:var(--cc-accent-soft)!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] .bg-primary-400{
+ background:var(--cc-accent-strong)!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] .bg-primary-400 svg{
+ color:#FFFFFF!important;-webkit-text-fill-color:#FFFFFF!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] button > div.flex.size-12[class*="bg-white/"]{
+ background:var(--cc-accent-soft)!important;
+}
+body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] button > div.flex.size-12[class*="bg-white/"] svg{
+ color:var(--cc-accent-strong)!important;-webkit-text-fill-color:var(--cc-accent-strong)!important;
+}
+`;
 let panel=null,toggle=null,editShortcut=null,observer=null,scheduled=false;
 const sendOriginals=new Map();
 function makeSendArrow(){
@@ -1560,7 +1980,7 @@ function makeSendArrow(){
 }
 const actionButtons=new Map();
 const marked=new Set();
-function save(){try{localStorage.setItem(STORE,JSON.stringify(settings));}catch(e){}}
+function save(){try{localStorage.setItem(STORE,JSON.stringify(settings));}catch(e){} if(OUTER_ROOM)sendToCozyScene('settings',settings);}
 /* Reliable inline dialogue highlighting for desktop and mobile.
    Keep the inline spans mounted when toggled off. CSS alone controls visibility.
    This avoids a remove/re-wrap race when Zeta re-renders its messages. */
@@ -1575,7 +1995,7 @@ function clearInlineDialogue(){
 }
 function updateDialogueHighlight(){
  if(!settings.dialogueHighlight || dialogueUpdating)return;
- const room=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
+ const room=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)');
  if(!room)return;
  dialogueUpdating=true;
  try{
@@ -1624,10 +2044,13 @@ function applyOpts(){
  if(panel)for(const input of panel.querySelectorAll('input[name="cc-avatar-mode"]'))input.checked=input.value===settings.avatarMode;
  const highlightInput=panel?.querySelector('#cc-dialogue-highlight-toggle');
  if(highlightInput)highlightInput.checked=settings.dialogueHighlight===true;
+ const narrationInput=panel?.querySelector('#cc-remove-narration-toggle');
+ if(narrationInput)narrationInput.checked=settings.removeNarration===true;
 }
+const frameCapturedTimes=new WeakMap();
 function getTime(body){
  const node=body.querySelector('time[datetime], [data-timestamp], [datetime]');
- if(!node)return '';
+ if(!node){const observed=frameCapturedTimes.get(body);return observed?new Date(observed).toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'}):'';}
  const dt=node.getAttribute('datetime')||node.getAttribute('data-timestamp');
  if(!dt)return '';
  let date=new Date(dt);
@@ -1665,13 +2088,34 @@ function characterLetterTime(body){
  }
  return new Date(iso).toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'});
 }
+// A new scene row no longer exposes message IDs. Fingerprint its rendered message
+// locally (never store the message text) so timestamps survive a page reload.
+function frameMessageKey(body){
+ const bubble=body.querySelector('[data-sentry-component="ChatBubbleContainer"]');
+ if(!bubble)return '';
+ const chat=bubble.querySelector('.chat');
+ // Ignore labels/cards injected by this theme, so the key stays identical
+ // before and after rendering or when the theme is toggled.
+ const copy=(chat||bubble).cloneNode(true);
+ copy.querySelectorAll('.cc-meta,.cc-letter-meta,.cc-meta-date,.cc-meta-time').forEach(x=>x.remove());
+ let content=(copy.textContent||'').replace(/\s+/g,' ').trim();
+ if(!content)return '';
+ let hash=2166136261;
+ for(let i=0;i<content.length;i++){
+  hash^=content.charCodeAt(i);
+  hash=Math.imul(hash,16777619);
+ }
+ return 'scene-'+(body.matches('[data-sentry-component="RightTextContent"]')?'u':'c')+'-'+content.length+'-'+(hash>>>0).toString(36);
+}
 function messageKey(body){
- // Prefer BodyView's real id, including when the outer virtual row is local-reply-N.
+ // Prefer stable Zeta identifiers where they exist; otherwise use the rendered
+ // text's local fingerprint in the new iframe. No Zeta API or hidden state.
  const view=body.closest('[data-sentry-component="BodyView"]');
  if(view?.id?.startsWith('message-'))return view.id;
  const outer=body.closest('[data-key], [id^="message-"]');
  const raw=outer?.getAttribute('data-key')||outer?.id||'';
- return raw.startsWith('message-')?raw:'';
+ if(raw.startsWith('message-'))return raw;
+ return FRAME_CHAT?frameMessageKey(body):'';
 }
 function storeLetterTime(key,iso){
  if(!key||!iso)return;
@@ -1689,29 +2133,43 @@ function readLetterTime(body){
  return Number.isFinite(date.getTime())?date.toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'}):'';
 }
 function captureSend(){
- if(!document.querySelector('[data-sentry-component="ChatRoomReadyView"]'))return;
- const input=document.querySelector('[data-testid="composer-input-box"] textarea[name="message"]');
+ if(!document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)'))return;
+ const input=document.querySelector('[data-testid="composer-input-box"] textarea');
  if(!input||!input.value.trim())return;
  const known=new Set([...document.querySelectorAll('[data-sentry-component="RightTextContent"]')].map(messageKey).filter(Boolean));
- pendingSend={time:new Date().toISOString(),known,created:Date.now()};
+ pendingSend={time:new Date().toISOString(),known,created:Date.now(),frameKnown:FRAME_CHAT?new WeakSet([...document.querySelectorAll('[role="log"] [data-sentry-component="LeftTextContent"],[role="log"] [data-sentry-component="RightTextContent"]')]):null};
  beginTurnCapture(pendingSend.time);
 }
-function onSendClick(event){if(event.target.closest?.('[data-testid="chat-send-button"]'))captureSend();}
+function onSendClick(event){
+ const btn=event.target.closest?.('button');
+ if(!btn)return;
+ const composer=document.querySelector('[data-testid="composer-input-box"]');
+ const dock=composer?.parentElement?.parentElement;
+ const label=(btn.getAttribute('aria-label')||'').toLowerCase();
+ const isSend=btn.matches('[data-testid="chat-send-button"],button[type="submit"]') ||
+   /^(send|send message|메시지 전송|전송하기|보내기)$/.test(label) ||
+   (FRAME_CHAT&&dock?.contains(btn)&&!btn.disabled&&
+      !btn.matches('[aria-label="Insert asterisk"],[aria-label="Save edit"],[aria-label="Cancel editing"]')&&
+      btn.querySelector('svg path[d^="M"]')&&
+      btn.getBoundingClientRect().right>composer.getBoundingClientRect().right-64 &&
+      btn.getBoundingClientRect().bottom>=composer.getBoundingClientRect().top);
+ if(isSend)captureSend();
+}
 function onSendKey(event){
- if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.target.matches?.('textarea[name="message"]'))captureSend();
+ if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.target.matches?.('[data-testid="composer-input-box"] textarea'))captureSend();
 }
 /* V40: Present the actual character name in the room header, without editing the plot title. */
 let previousHeaderElement=null;
 let previousHeaderText='';
 let appliedHeaderText='';
 function enhanceHeader(){
- const header=document.querySelector('[data-sentry-component="ChatRoomReadyView"] [data-testid="chat-header-profile"] span');
+ const header=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-testid="chat-header-profile"] span');
  if(!header)return;
- const characterBody=document.querySelector('[data-sentry-component="ChatRoomReadyView"] [data-sentry-component="LeftTextContent"]');
+ const characterBody=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"]');
  if(!characterBody)return;
  const avatarName=characterBody.querySelector('button img[alt]')?.getAttribute('alt')?.trim()||'';
  const displayedName=characterBody.querySelector('.cc-meta-name')?.textContent?.trim()||
-  characterBody.querySelector('.caption1')?.textContent?.trim()||'';
+  characterBody.querySelector('.caption1')?.textContent?.trim()||(FRAME_CHAT?frameName(characterBody):'')||'';
  const validName=name=>Boolean(name&&!/^#[0-9a-f]{3,8}$/i.test(name)&&name!=='­');
  const name=[avatarName,displayedName].find(validName);
  if(!name)return;
@@ -1742,7 +2200,7 @@ function enhanceLetters(){
   if(!quotes.length)continue;
   const isUser=body.matches('[data-sentry-component="RightTextContent"]');
   const key=messageKey(body);
-  const ownName=body.querySelector('.cc-meta-name')?.textContent?.trim()||body.querySelector('.caption1')?.textContent?.trim();
+  const ownName=body.querySelector('.cc-meta-name')?.textContent?.trim()||body.querySelector('.caption1')?.textContent?.trim()||(FRAME_CHAT?frameName(body):'');
   // Prefer the character's actual chat identity, NOT the plot/room title.
   // Avatar alt is the most reliable identity across rooms with blank or hex-color plot names.
   const characterBody=document.querySelector('[data-sentry-component="LeftTextContent"]');
@@ -1792,9 +2250,16 @@ let knownViewKeys=new Set();
 let knownViewElements=new WeakSet();
 const liveTurnTimes=new WeakMap();
 function currentRoomMessageBodies(){
- return document.querySelectorAll('[data-sentry-component="ChatRoomReadyView"] :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"])');
+ return document.querySelectorAll(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"])');
 }
-function viewOf(body){return body.closest('[data-sentry-component="BodyView"]');}
+// The iframe's URL has a per-run identifier; its pathname alone is shared by all
+// rooms. This keeps different chats from sharing the same local timestamps.
+function turnRoomKey(){
+ if(!FRAME_CHAT)return location.pathname;
+ const run=location.hash.match(/(?:^#|[&?])run=([^&]+)/)?.[1]||'';
+ return location.origin+location.pathname+'#run='+run;
+}
+function viewOf(body){return body.closest('[data-sentry-component="BodyView"]')||(FRAME_CHAT?body:null);}
 function rowOf(body){return viewOf(body)?.closest('[data-index]');}
 function rowIndex(body){
  const value=rowOf(body)?.getAttribute('data-index');
@@ -1802,10 +2267,10 @@ function rowIndex(body){
 }
 function scopedKey(body){
  const id=messageKey(body);
- return id?location.pathname+'::'+id:'';
+ return id?turnRoomKey()+'::'+id:'';
 }
 function resetTurnRoom(){
- turnRoomPath=location.pathname;
+ turnRoomPath=turnRoomKey();
  knownViewKeys=new Set();
  knownViewElements=new WeakSet();
  for(const body of currentRoomMessageBodies()){
@@ -1817,7 +2282,7 @@ function resetTurnRoom(){
  turnPending=null;
 }
 function beginTurnCapture(iso){
- if(turnRoomPath!==location.pathname)resetTurnRoom();
+ if(turnRoomPath!==turnRoomKey())resetTurnRoom();
  const known=new Set(knownViewKeys);
  const knownElements=new WeakSet();
  for(const body of currentRoomMessageBodies()){
@@ -1826,7 +2291,7 @@ function beginTurnCapture(iso){
   const key=scopedKey(body);
   if(key)known.add(key);
  }
- turnPending={room:location.pathname,time:iso,started:Date.now(),known,knownElements,user:null,userView:null,userIndex:NaN,characterFound:false};
+ turnPending={room:turnRoomKey(),time:iso,started:Date.now(),known,knownElements,user:null,userView:null,userIndex:NaN,characterFound:false};
 }
 function saveTurns(){
  if(turns.length>TURN_LIMIT)turns=turns.slice(-TURN_LIMIT);
@@ -1835,9 +2300,9 @@ function saveTurns(){
 function recordUserTurn(body,time){
  const user=scopedKey(body);
  if(!user)return null;
- const existing=turns.find(x=>x.room===location.pathname&&x.user===user);
+ const existing=turns.find(x=>x.room===turnRoomKey()&&x.user===user);
  if(existing)return existing;
- const record={room:location.pathname,user,time};
+ const record={room:turnRoomKey(),user,time};
  turns.push(record);
  saveTurns();
  return record;
@@ -1846,7 +2311,7 @@ function turnForBody(body){
  const key=scopedKey(body);
  if(!key)return null;
  const isUser=body.matches('[data-sentry-component="RightTextContent"]');
- return turns.find(x=>x.room===location.pathname&&(isUser?x.user===key:x.character===key))||null;
+ return turns.find(x=>x.room===turnRoomKey()&&(isUser?x.user===key:(x.character===key||x.characters?.includes(key))))||null;
 }
 function turnStampForBody(body){
  const view=viewOf(body);
@@ -1877,9 +2342,9 @@ function nearestUserTurn(body){
  return best&&index-bestIndex<=2?best:null;
 }
 function enhanceDates(){
- if(!document.querySelector('[data-sentry-component="ChatRoomReadyView"]'))return;
- if(turnRoomPath!==location.pathname)resetTurnRoom();
- if(turnPending&&(turnPending.room!==location.pathname||Date.now()-turnPending.started>180000))turnPending=null;
+ if(!document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)'))return;
+ if(turnRoomPath!==turnRoomKey())resetTurnRoom();
+ if(turnPending&&(turnPending.room!==turnRoomKey()||Date.now()-turnPending.started>180000))turnPending=null;
  const bodies=[...currentRoomMessageBodies()];
  // Resolve newly rendered user view first, independently of DOM query order.
  if(turnPending&&!turnPending.user){
@@ -1905,11 +2370,15 @@ function enhanceDates(){
   const key=scopedKey(body);
   const isFresh=!!(turnPending&&turnPending.user&&(key?!turnPending.known.has(key):!turnPending.knownElements.has(view)));
   const idx=rowIndex(body);
-  const adjacent=isFresh&&Number.isFinite(idx)&&Number.isFinite(turnPending.userIndex)&&idx>turnPending.userIndex&&idx-turnPending.userIndex<=2;
+  const adjacent=FRAME_CHAT?isFresh:(isFresh&&Number.isFinite(idx)&&Number.isFinite(turnPending.userIndex)&&idx>turnPending.userIndex&&idx-turnPending.userIndex<=2);
   if(adjacent){
    const record=turnPending.user;
    liveTurnTimes.set(view,record.time);
-   if(key&&record.character!==key){record.character=key;saveTurns();}
+   if(key){
+    if(!record.character)record.character=key;
+    if(!Array.isArray(record.characters))record.characters=[];
+    if(!record.characters.includes(key)){record.characters.push(key);saveTurns();}
+   }
    turnPending.characterFound=true;
   }else if(!turnForBody(body)){
    // Recover stable local-reply ids, when user and character share the same visible turn.
@@ -1925,17 +2394,41 @@ function enhanceDates(){
   if(view)knownViewElements.add(view);
   if(key)knownViewKeys.add(key);
   const bubble=body.querySelector('[data-sentry-component="ChatBubbleContainer"]');
-  const meta=bubble?.querySelector(':scope > .cc-meta');
+  if(!bubble)continue;
+  let meta=bubble.querySelector(':scope > .cc-meta');
+  if(!meta&&FRAME_CHAT){
+   const name=frameName(body);
+   if(name){
+    meta=document.createElement('div');meta.className='cc-meta';
+    const nameNode=document.createElement('span');nameNode.className='cc-meta-name';nameNode.textContent=name;
+    meta.appendChild(nameNode);bubble.prepend(meta);
+    const nativeName=frameNameLabel(body);
+    if(nativeName){nativeName.classList.add('cc-name-hidden');marked.add(nativeName);}
+   }
+  }
   if(!meta)continue;
-  const stamp=turnStampForBody(body);
+  let stamp=turnStampForBody(body)||(FRAME_CHAT?frameCapturedTimes.get(body):null);
+  // In the iframe, React can replace an outgoing user's DOM row before the
+  // room's stable local fingerprint is ready. Capture only genuinely NEW rows.
+  if(!stamp&&FRAME_CHAT&&turnPending&&Date.now()-turnPending.started<60000){
+   const isNew=key?!turnPending.known.has(key):!turnPending.knownElements.has(view);
+   if(isNew&&body.matches('[data-sentry-component="RightTextContent"]')){
+    stamp=turnPending.time;
+    if(view)liveTurnTimes.set(view,stamp);
+    if(key&&!turnPending.user){turnPending.user=recordUserTurn(body,stamp);turnPending.userView=view;}
+   }
+  }
   const label=stamp?relativeDate(stamp):'';
+  // The chat name shows only relative day; absolute clock belongs to letter cards.
+  const obsoleteClock=meta.querySelector(':scope > .cc-meta-time');
+  if(obsoleteClock)obsoleteClock.remove();
   let tag=meta.querySelector(':scope > .cc-meta-date');
   if(label){
    if(!tag){tag=document.createElement('span');tag.className='cc-meta-date';meta.appendChild(tag);}
    if(tag.textContent!=='· '+label)tag.textContent='· '+label;
   }else if(tag)tag.remove();
  }
- if(turnPending?.characterFound)turnPending=null;
+ if(turnPending?.characterFound&&!FRAME_CHAT)turnPending=null;
  if(pendingSend&&Date.now()-pendingSend.created>60000)pendingSend=null;
 }
 
@@ -1944,17 +2437,20 @@ function enhance(){
  for(const body of bodies){
   const bubble=body.querySelector('[data-sentry-component="ChatBubbleContainer"]');
   if(!bubble||bubble.querySelector(':scope>.cc-meta'))continue;
-  const label=body.querySelector('.caption1');
-  if(!label)continue;
-  const name=(label.textContent||'').trim();
+  // Only attach a local clock to new rows rendered immediately after an actual send.
+  // Do not invent timestamps for already-existing messages.
+  if(FRAME_CHAT&&pendingSend?.frameKnown&&Date.now()-pendingSend.created<30000&&!pendingSend.frameKnown.has(body)){
+   frameCapturedTimes.set(body,pendingSend.time);pendingSend.frameKnown.add(body);
+  }
+  const label=body.querySelector('.caption1')||(FRAME_CHAT?frameNameLabel(body):null);
+  const name=label?.textContent?.trim()||(FRAME_CHAT?frameName(body):'');
   if(!name)continue;
   const meta=document.createElement('div');meta.className='cc-meta';meta.setAttribute('aria-label','메시지 작성자');
   const nameSpan=document.createElement('span');nameSpan.className='cc-meta-name';nameSpan.textContent=name;meta.appendChild(nameSpan);
   const time=getTime(body);
   if(time){const timeSpan=document.createElement('span');timeSpan.className='cc-meta-time';timeSpan.textContent='· '+time;meta.appendChild(timeSpan);}
   bubble.insertBefore(meta,bubble.firstChild);
-  label.classList.add('cc-name-hidden');
-  marked.add(label);
+  if(label){label.classList.add('cc-name-hidden');marked.add(label);}
  }
 }
 
@@ -2070,7 +2566,7 @@ function formatEditTextarea(textarea){
 function finishPendingLineEdit(){
  if(!lineEditPending)return;
  if(Date.now()>lineEditExpiresAt){lineEditPending=false;return;}
- const field=document.querySelector('[data-sentry-component="EditModeInputPanelContent"] textarea[name="message"]');
+ const field=document.querySelector('[data-sentry-component="EditModeInputPanelContent"] textarea[name="message"],body.cc-frame-chat-root section textarea[name="message"]');
  if(!field)return;
  // Do not change anything else after formatting; native Save/Cancel stays with the user.
  lineEditPending=false;
@@ -2078,10 +2574,17 @@ function finishPendingLineEdit(){
  formatEditTextarea(field);
 }
 function pressLineTool(){
- const field=document.querySelector('[data-sentry-component="EditModeInputPanelContent"] textarea[name="message"]');
+ if(OUTER_ROOM){sendToCozyScene('line');return;}
+ const field=document.querySelector('[data-sentry-component="EditModeInputPanelContent"] textarea[name="message"],body.cc-frame-chat-root section textarea[name="message"]');
  if(field){formatEditTextarea(field);return;}
- const edit=document.querySelector('[data-sentry-component="LastMessageControlBar"] button[aria-label="Edit message"]');
- if(!edit||edit.disabled)return;
+ const edit=nativeEditButton();
+ if(!edit||edit.disabled){
+  const old=document.getElementById('cc-line-tool-hint');old?.remove();
+  const hint=document.createElement('div');hint.id='cc-line-tool-hint';
+  hint.textContent='제타의 수정 버튼을 찾지 못했어요. 순정 ✎ 버튼으로 수정창을 열고 다시 눌러주세요.';
+  hint.style.cssText='position:fixed;z-index:2147483647;left:14px;right:14px;bottom:180px;padding:12px 16px;border:1px solid #ddd;border-radius:12px;background:white;color:#333;font:13px/1.5 sans-serif;box-shadow:0 4px 18px #0002;text-align:center;pointer-events:none';
+  document.body.appendChild(hint);setTimeout(()=>hint.remove(),3500);return;
+ }
  lineEditPending=true;
  lineEditExpiresAt=Date.now()+5000;
  // One native Edit click in direct response to the user's click; never auto-save.
@@ -2093,6 +2596,8 @@ function pressLineTool(){
 }
 
 function schedule(){
+ markFrameChatRoot();
+ announceFrameControls();
  if(scheduled)return;
  scheduled=true;
  requestAnimationFrame(()=>{scheduled=false;finishPendingLineEdit();enhance();enhanceHeader();enhanceDates();enhanceLetters();updateDialogueHighlight();makeSendArrow();updateActionAvailability();});
@@ -2110,7 +2615,7 @@ const actions=[
    Native jump-to-latest is 32px wide; match its right edge and button size. */
 function positionControls(){
  if(!toggle||!panel)return;
- const chatRoom=document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
+ const chatRoom=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)');
  // Desktop content is centered inside a full-width chat room. Anchor to the
  // narrower composer (or the centered message column), not the outer room.
  const anchor=document.querySelector('[data-testid="composer-input-box"]')
@@ -2118,48 +2623,133 @@ function positionControls(){
    ||chatRoom;
  const chatRect=anchor?.getBoundingClientRect();
  const right=(chatRect&&chatRect.width>0?Math.max(8,window.innerWidth-chatRect.right+8):8)+'px';
- const bottom='120px';
+ const bottom=FRAME_CHAT?'170px':'120px';
  toggle.style.setProperty('right',right,'important');
  toggle.style.setProperty('bottom',bottom,'important');
  panel.style.setProperty('right',right,'important');
- panel.style.setProperty('bottom','160px','important');
- if(editShortcut){editShortcut.style.setProperty('right',right,'important');editShortcut.style.setProperty('bottom','164px','important');}
- if(lineShortcut){lineShortcut.style.setProperty('right',right,'important');lineShortcut.style.setProperty('bottom','208px','important');}
+ panel.style.setProperty('bottom',FRAME_CHAT?'214px':'160px','important');
+ if(editShortcut){editShortcut.style.setProperty('right',right,'important');editShortcut.style.setProperty('bottom',FRAME_CHAT?'214px':'164px','important');}
+ if(lineShortcut){lineShortcut.style.setProperty('right',right,'important');lineShortcut.style.setProperty('bottom',FRAME_CHAT?'258px':'208px','important');}
+}
+
+// Resolve real on-screen Zeta buttons from rendered DOM only. Hidden native
+// buttons remain in the DOM so their normal click handlers still work.
+/* Exact native action strip supplied by the user. Find and mark only the
+   toolbar containing Report/Edit/Request/Regenerate + Snapshot. No guessed
+   positions, no Zeta APIs and no removal of Zeta nodes or click handlers. */
+function nativeToolbar(){
+ if(!FRAME_CHAT)return null;
+ // The exact action bar supplied by the user has a report button, an edit
+ // button, a request button and a regenerate button. Snapshot may be missing
+ // or temporarily disabled, so never use it as a prerequisite.
+ for(const report of document.querySelectorAll('button[aria-label="Report message"]')){
+  if(report.closest('#cc-panel,[role="dialog"],[data-testid="bottom-panel-slot"]'))continue;
+  const group=report.parentElement;
+  const strip=group?.parentElement;
+  if(!strip||!group?.classList.contains('ml-auto'))continue;
+  if(strip.querySelector('button[aria-label="Edit message"]') &&
+     strip.querySelector('button[aria-label="Regenerate with a request"]') &&
+     strip.querySelector('button[aria-label="Regenerate answers"]'))return strip;
+ }
+ return null;
+}
+function markFrameNativeTools(){
+ if(!FRAME_CHAT)return;
+ const strip=nativeToolbar();
+ if(!strip)return;
+ strip.classList.add('cc-native-toolbar-group');
+ for(const btn of strip.querySelectorAll('button'))btn.classList.add('cc-native-toolbar-button');
+ const edit=strip.querySelector('button[aria-label="Edit message"]');
+ if(edit && !edit.disabled)frameNativeEditButton=edit;
+}
+function availableNativeAction(key){
+ // Each action is discovered independently. An unavailable Snapshot must not
+ // make Report, Request or Regenerate unavailable.
+ if(!FRAME_CHAT)return null;
+ const strip=nativeToolbar();
+ const findEnabled=sel=>[...(strip||document).querySelectorAll(sel)].find(btn=>
+  !btn.disabled && !btn.closest('#cc-panel') &&
+  btn.id!=='cc-edit-shortcut' && btn.id!=='cc-line-shortcut');
+ if(key==='edit')return nativeEditButton();
+ if(key==='report')return findEnabled('button[aria-label="Report message"]');
+ if(key==='request')return findEnabled('button[aria-label="Regenerate with a request"]');
+ if(key==='regen')return findEnabled('button[aria-label="Regenerate answers"]');
+ if(key==='snapshot'){
+  // The snapshot pill has no aria-label: match its visible text, first in
+  // the exact toolbar and otherwise only in small real buttons elsewhere.
+  const roots=strip?[strip,document]:[document];
+  for(const root of roots){
+   const found=[...root.querySelectorAll('button')].find(btn=>
+    !btn.disabled && !btn.closest('#cc-panel,[data-testid="bottom-panel-slot"]') &&
+    /(?:스냅샷|snapshot)/i.test((btn.textContent||'')+' '+(btn.getAttribute('aria-label')||'')) &&
+    btn.id!=='cc-toggle');
+   if(found)return found;
+  }
+  return null;
+ }
+ if(key==='suggest')return [...document.querySelectorAll('button[aria-label="Suggested replies"],button[aria-label="Get suggestions"],button[aria-label="추천 답변"],[data-sentry-component="QuickReplyButton"] button')].find(btn=>!btn.disabled&&!btn.closest('#cc-panel')&&btn.id!=='cc-toggle'&&btn.id!=='cc-edit-shortcut'&&btn.id!=='cc-line-shortcut')||null;
+ return null;
 }
 
 function updateActionAvailability(){
+ if(OUTER_ROOM){
+  positionControls();
+  if(editShortcut){editShortcut.disabled=false;editShortcut.title='채팅 프레임에 수정창 열기 요청';}
+  if(lineShortcut){lineShortcut.disabled=false;lineShortcut.title='채팅 프레임에 줄 정리 요청';}
+  for(const btn of actionButtons.values()){btn.disabled=false;btn.title='채팅 프레임의 순정 도구 실행';}
+  return;
+ }
+ removeDuplicateCozyControls();
+ markFrameNativeTools();
  positionControls();
- const isChat=!!document.querySelector('[data-sentry-component="ChatRoomReadyView"]');
+ const isChat=!!document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root)');
  document.documentElement.classList.toggle('cc-tools-ready',isChat&&!!panel);
- if(editShortcut){const original=document.querySelector(actions.find(a=>a[0]==='edit')[2]);editShortcut.disabled=!isChat||!original||original.disabled;}
+ if(editShortcut){const original=nativeEditButton();editShortcut.disabled=!isChat||!original||original.disabled;editShortcut.title=original?'메시지 수정':'새 화면의 수정 버튼을 아직 찾지 못했어요';}
+ if(lineShortcut){lineShortcut.disabled=!isChat;lineShortcut.title='수정창을 열고 줄 정리 (저장은 직접)';}
  for(const [key,,selector] of actions){
   const btn=actionButtons.get(key);
-  if(btn)btn.disabled=!isChat||!document.querySelector(selector);
+  if(btn){const original=availableNativeAction(key);btn.disabled=!isChat||!original;btn.title=original?'제타의 원래 버튼 실행':'이 채팅 화면에서 해당 버튼을 찾지 못했어요';}
  }
 }
 function runOriginalAction(key){
+ if(OUTER_ROOM){const sent=sendToCozyScene(key==='edit'?'edit':'action',key==='edit'?null:key);if(sent){panel.hidden=true;panel.style.removeProperty('display');}else console.warn('[Clean Cozy] 채팅 iframe을 찾지 못해 작업을 실행하지 않았어요.');return;}
  const def=actions.find(a=>a[0]===key);
  if(!def)return;
- const original=document.querySelector(def[2]);
+ const original=key==='edit'?nativeEditButton():availableNativeAction(key);
  if(!original||original.disabled)return;
- panel.hidden=true;
+ panel.hidden=true;panel.style.removeProperty('display');toggle?.setAttribute('aria-expanded','false');
  original.click();
 }
 function onSettingsOutsidePointer(event){
  if(!panel||panel.hidden)return;
  const target=event.target;
  if(target instanceof Node&&(panel.contains(target)||toggle?.contains(target)))return;
- panel.hidden=true;
+ panel.hidden=true;panel.style.removeProperty('display');toggle?.setAttribute('aria-expanded','false');
+}
+function removeDuplicateCozyControls(){
+ // Multiple injection worlds can leave previous copies mounted. Preserve the
+ // elements owned by this active instance, remove only the extra copies.
+ for(const [id,owned] of [['cc-line-shortcut',lineShortcut],['cc-edit-shortcut',editShortcut],['cc-toggle',toggle],['cc-panel',panel]]){
+  for(const element of document.querySelectorAll('[id="'+id+'"]')){
+   if(owned&&element===owned)continue;
+   element.remove();
+  }
+ }
 }
 function makeControls(){
+ // Keep the existing floating controls. The parent copies disappear only
+ // after the iframe confirms that its own buttons actually exist.
+ removeDuplicateCozyControls();
  lineShortcut=document.createElement('button');lineShortcut.id='cc-line-shortcut';lineShortcut.type='button';
  lineShortcut.title='수정창에서 줄 정리 (저장은 직접)';
  lineShortcut.setAttribute('aria-label','수정창 열고 줄 정리');
  lineShortcut.innerHTML='<svg viewBox="0 0 24 24" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 11h11M4 16h16M4 21h9"/></svg>';
  lineShortcut.addEventListener('click',pressLineTool);
+ if(FRAME_CHAT)lineShortcut.title='새 편집 버튼 구조 확인 전까지 비활성화';
  editShortcut=document.createElement('button');editShortcut.id='cc-edit-shortcut';editShortcut.type='button';
  editShortcut.title='메시지 수정';editShortcut.setAttribute('aria-label','Edit message');editShortcut.textContent='✎';
  editShortcut.addEventListener('click',()=>runOriginalAction('edit'));
+ if(FRAME_CHAT)editShortcut.title='새 편집 버튼 구조 확인 전까지 비활성화';
  toggle=document.createElement('button');toggle.id='cc-toggle';toggle.type='button';toggle.title='클린 코지 설정 및 채팅 도구';toggle.setAttribute('aria-label','클린 코지 설정 및 채팅 도구');toggle.textContent='⚙';
  panel=document.createElement('div');panel.id='cc-panel';panel.hidden=true;
  const avatarTitle=document.createElement('div');avatarTitle.className='cc-section-title';avatarTitle.textContent='프로필 사진';panel.appendChild(avatarTitle);
@@ -2189,7 +2779,7 @@ function makeControls(){
  narrationCheckbox.addEventListener('change',()=>{settings.removeNarration=narrationCheckbox.checked;save();});
  const narrationText=document.createElement('span');narrationText.textContent='나레이션 삭제 (@:)';
  narrationLabel.append(narrationCheckbox,narrationText);panel.appendChild(narrationLabel);
- const section=document.createElement('div');section.className='cc-section-title';section.textContent='채팅 도구';panel.appendChild(section);
+ const section=document.createElement('div');section.className='cc-section-title';section.textContent='채팅 도구 · 제타 버튼 연동';panel.appendChild(section);
  const list=document.createElement('div');list.className='cc-action-list';
  for(const [key,title] of actions){
   if(key==='edit')continue;
@@ -2198,13 +2788,44 @@ function makeControls(){
   actionButtons.set(key,btn);list.appendChild(btn);
  }
  panel.appendChild(list);
- toggle.addEventListener('click',()=>{panel.hidden=!panel.hidden;updateActionAvailability();});
+ // The scene's floating layers can override CSS visibility. Keep the settings
+ // panel open/closed state explicit, and move it into view before rendering.
+ const setSettingsOpen=(open)=>{
+  if(!panel.isConnected)document.body.appendChild(panel);
+  panel.hidden=!open;
+  panel.setAttribute('aria-hidden',String(!open));
+  toggle.setAttribute('aria-expanded',String(open));
+  if(open){
+   positionControls();
+   panel.style.setProperty('display','block','important');
+   panel.style.setProperty('visibility','visible','important');
+   panel.style.setProperty('opacity','1','important');
+   panel.style.setProperty('pointer-events','auto','important');
+   panel.style.setProperty('z-index','2147483646','important');
+   // Make the panel visible even when the mobile scene resizes around a keyboard.
+   const rect=panel.getBoundingClientRect();
+   if(rect.top<8)panel.style.setProperty('bottom',Math.max(8,innerHeight-rect.height-8)+'px','important');
+  }else{
+   panel.style.removeProperty('display');
+   panel.style.removeProperty('visibility');
+   panel.style.removeProperty('opacity');
+   panel.style.removeProperty('pointer-events');
+  }
+ };
+ toggle.setAttribute('aria-haspopup','dialog');
+ toggle.setAttribute('aria-expanded','false');
+ toggle.addEventListener('click',(event)=>{
+  event.stopPropagation();
+  const opening=panel.hidden;
+  setSettingsOpen(opening);
+  if(opening)updateActionAvailability();
+ });
  // Close when the user clicks outside the settings panel and gear button.
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,panel);applyOpts();updateActionAvailability();
  window.addEventListener('resize',positionControls);
 }
-function stop(){clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);window.removeEventListener('resize',positionControls);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);window.removeEventListener('resize',positionControls);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -2212,5 +2833,5 @@ function stop(){clearInlineDialogue();restoreHeader();lineEditPending=false;if(l
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{if(document.querySelector('.cc-meta-date'))schedule();},60000);applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});window[KEY]={stop,version:VERSION,palette:chosenKey};
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
