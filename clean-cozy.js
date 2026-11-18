@@ -1,15 +1,8 @@
-/*
- * Clean Cozy · Pastel Collection
- * Published build: v1.7.5
- * Loader target: https://clean-theme-js.netlify.app/clean-cozy.js
- * DOM/CSS client-side customization only.
- */
-
 (function(){const keys=['gray','pink','yellow','blue','green','purple'];const last=window.__ccLastPalette;const list=keys.filter(x=>x!==last);const pick=list[Math.floor(Math.random()*list.length)];window.__ccLastPalette=pick;window.__ccNextPalette=pick;})();
 (()=>{
 'use strict';
 const ID='zeta-clean-cozy-v41';
-const VERSION=50;
+const VERSION=53;
 const PALETTES={"gray":{"ko":"그레이","bg":"#F7F7F8","user":"#F1F1F3","accent":"#A7ABB1","strong":"#4B5057","soft":"#EEEFF1","hover":"#E3E5E8","stroke":"#E1E3E6","icon":"#737780","scroll":"#C8CBD0","alt":"#FAFAFB"},"pink":{"ko":"연핑크","bg":"#FCF8FA","user":"#F8EDF1","accent":"#D8B7C5","strong":"#8D6576","soft":"#F7EDF2","hover":"#F0E1E8","stroke":"#EEDFE5","icon":"#9B7B88","scroll":"#DFC9D2","alt":"#FFFBFC"},"yellow":{"ko":"연노랑","bg":"#FCFBF5","user":"#F9F4E3","accent":"#D8C89A","strong":"#8B7951","soft":"#F7F3E5","hover":"#F0EAD7","stroke":"#EBE5D1","icon":"#98855D","scroll":"#DDD4B6","alt":"#FFFEF9"},"blue":{"ko":"연파랑","bg":"#F7FAFD","user":"#ECF3FA","accent":"#B3CDE3","strong":"#587B9B","soft":"#EDF4FA","hover":"#E1EDF7","stroke":"#DDE9F2","icon":"#7895AE","scroll":"#C8D9E8","alt":"#FBFDFF"},"green":{"ko":"연두","bg":"#F8FBF7","user":"#EFF6EA","accent":"#BED3B2","strong":"#6B8961","soft":"#F0F7EC","hover":"#E4EFE0","stroke":"#DFEADD","icon":"#81997B","scroll":"#CDDCC7","alt":"#FBFDFB"},"purple":{"ko":"연보라","bg":"#FAF8FD","user":"#F2EDFA","accent":"#C9B9E1","strong":"#7E6A9C","soft":"#F3EEFA","hover":"#EAE2F5","stroke":"#E7E0EF","icon":"#9485AB","scroll":"#D7CBE5","alt":"#FDFBFF"}};
 const chosen=window.__ccNextPalette;
 try{delete window.__ccNextPalette;}catch(e){}
@@ -2311,16 +2304,12 @@ function cleanTurnRows(list,room){
 function mergeTurnRows(base,incoming){
  const merged=base.map(row=>({...row,characters:Array.isArray(row.characters)?[...row.characters]:row.characters}));
  for(const row of incoming){
-  const found=merged.find(x=>
-   x.room===row.room&&(
-    x.user===row.user||
-    (Number.isFinite(x.userIndex)&&Number.isFinite(row.userIndex)&&x.userIndex===row.userIndex)
-   )
-  );
+  // A user turn is identified only by its stable rendered message key.
+  // data-index is a virtual-list position and may be reused by a later message.
+  const found=merged.find(x=>x.room===row.room&&x.user===row.user);
   if(!found){merged.push(row);continue;}
   if(!found.time&&row.time)found.time=row.time;
   if(Number.isFinite(row.userIndex))found.userIndex=row.userIndex;
-  if(row.user)found.user=row.user;
   if(!found.character&&row.character)found.character=row.character;
   const chars=new Set([
    ...(Array.isArray(found.characters)?found.characters:[]),
@@ -2441,17 +2430,13 @@ function recordUserTurn(body,time){
  const user=scopedKey(body);
  if(!user)return null;
  const index=rowIndex(body);
- const existing=turns.find(x=>
-  x.room===turnRoomKey()&&(
-   x.user===user||
-   (Number.isFinite(index)&&Number.isFinite(x.userIndex)&&x.userIndex===index)
-  )
- );
+ // The rendered message key is the identity. data-index is NOT identity.
+ const existing=turns.find(x=>x.room===turnRoomKey()&&x.user===user);
  if(existing){
-  let changed=false;
-  if(existing.user!==user){existing.user=user;changed=true;}
-  if(Number.isFinite(index)&&existing.userIndex!==index){existing.userIndex=index;changed=true;}
-  if(changed)saveTurns();
+  if(Number.isFinite(index)&&existing.userIndex!==index){
+   existing.userIndex=index;
+   saveTurns();
+  }
   return existing;
  }
  const record={room:turnRoomKey(),user,time};
@@ -2463,17 +2448,42 @@ function recordUserTurn(body,time){
 function turnForBody(body){
  const key=scopedKey(body);
  const isUser=body.matches('[data-sentry-component="RightTextContent"]');
- const index=rowIndex(body);
  if(isUser){
-  return turns.find(x=>x.room===turnRoomKey()&&(
-   (key&&x.user===key)||
-   (Number.isFinite(index)&&Number.isFinite(x.userIndex)&&x.userIndex===index)
-  ))||null;
+  // User messages must never inherit a timestamp from a reused virtual row index.
+  return key?turns.find(x=>x.room===turnRoomKey()&&x.user===key)||null:null;
  }
- return turns.find(x=>x.room===turnRoomKey()&&(
-  (key&&(x.character===key||x.characters?.includes(key)))||
-  (Number.isFinite(index)&&Number.isFinite(x.userIndex)&&index>x.userIndex&&index-x.userIndex<=2)
- ))||null;
+ // Character messages must prefer their exact rendered key.
+ // Never let a recycled virtual-list data-index steal an older turn's date.
+ if(!key)return null;
+ return turns.find(x=>x.room===turnRoomKey()&&
+  (x.character===key||x.characters?.includes(key)))||null;
+}
+function recoverUserTurnFromFollowingCharacter(body,bodies){
+ if(!FRAME_CHAT||!body.matches('[data-sentry-component="RightTextContent"]'))return null;
+ const userKey=scopedKey(body);
+ if(!userKey)return null;
+ const start=bodies.indexOf(body);
+ if(start<0)return null;
+ // After a reload the user's local fingerprint can be rebuilt later than the
+ // persisted turn store. Recover it only from the immediately following visible
+ // character reply whose exact character key is already stored for that turn.
+ for(let i=start+1;i<bodies.length;i++){
+  const candidate=bodies[i];
+  if(candidate.matches('[data-sentry-component="RightTextContent"]'))break;
+  if(!candidate.matches('[data-sentry-component="LeftTextContent"]'))continue;
+  const characterKey=scopedKey(candidate);
+  if(!characterKey)continue;
+  const row=turns.find(x=>x.room===turnRoomKey()&&
+   (x.character===characterKey||x.characters?.includes(characterKey)));
+  if(!row)continue;
+  let changed=false;
+  if(row.user!==userKey){row.user=userKey;changed=true;}
+  const index=rowIndex(body);
+  if(Number.isFinite(index)&&row.userIndex!==index){row.userIndex=index;changed=true;}
+  if(changed)saveTurns();
+  return row;
+ }
+ return null;
 }
 function turnStampForBody(body){
  const view=viewOf(body);
@@ -2530,7 +2540,12 @@ function enhanceDates(){
   const view=viewOf(body);
   if(!view)continue;
   const key=scopedKey(body);
-  const isFresh=!!(turnPending&&turnPending.user&&(key?!turnPending.known.has(key):!turnPending.knownElements.has(view)));
+  // During iframe streaming the rendered text fingerprint changes every few tokens.
+  // A partial fingerprint can temporarily equal an older saved reply, so DOM element
+  // identity is the safer signal that this is the newly generated reply.
+  const isFresh=!!(turnPending&&turnPending.user&&(
+   FRAME_CHAT?!turnPending.knownElements.has(view):(key?!turnPending.known.has(key):!turnPending.knownElements.has(view))
+  ));
   const idx=rowIndex(body);
   const adjacent=FRAME_CHAT?isFresh:(isFresh&&Number.isFinite(idx)&&Number.isFinite(turnPending.userIndex)&&idx>turnPending.userIndex&&idx-turnPending.userIndex<=2);
   if(adjacent){
@@ -2560,7 +2575,9 @@ function enhanceDates(){
  for(const body of bodies){
   const view=viewOf(body),key=scopedKey(body);
   if(body.matches('[data-sentry-component="RightTextContent"]')){
-   const matched=turnForBody(body);
+   // Exact user key is preferred. If a reload rebuilt that key differently,
+   // repair it from the exact stored key of the immediately following reply.
+   const matched=turnForBody(body)||recoverUserTurnFromFollowingCharacter(body,bodies);
    const idx=rowIndex(body);
    if(matched&&Number.isFinite(idx)&&matched.userIndex!==idx){
     matched.userIndex=idx;
@@ -2584,7 +2601,19 @@ function enhanceDates(){
    }
   }
   if(!meta)continue;
-  let stamp=turnStampForBody(body)||(FRAME_CHAT?frameCapturedTimes.get(body):null);
+  let stamp='';
+  // A character reply that belongs to the currently pending send must display
+  // that send's time while it is streaming. Its partial text fingerprint may
+  // temporarily collide with an older saved reply, so do not let persisted
+  // history override the live pending turn.
+  if(FRAME_CHAT&&turnPending&&turnPending.user&&
+     body.matches('[data-sentry-component="LeftTextContent"]')&&
+     view&&!turnPending.knownElements.has(view)&&
+     Date.now()-turnPending.started<180000){
+   stamp=turnPending.time;
+   liveTurnTimes.set(view,stamp);
+  }
+  if(!stamp)stamp=turnStampForBody(body)||(FRAME_CHAT?frameCapturedTimes.get(body):null);
   // In the iframe, React can replace an outgoing user's DOM row before the
   // room's stable local fingerprint is ready. Capture only genuinely NEW rows.
   if(!stamp&&FRAME_CHAT&&turnPending&&Date.now()-turnPending.started<60000){
