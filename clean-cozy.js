@@ -1,6 +1,6 @@
 /*
  * Clean Cozy · Pastel Collection
- * Published build: v1.7.1
+ * Published build: v1.7.5
  * Loader target: https://clean-theme-js.netlify.app/clean-cozy.js
  * DOM/CSS client-side customization only.
  */
@@ -9,7 +9,7 @@
 (()=>{
 'use strict';
 const ID='zeta-clean-cozy-v41';
-const VERSION=46;
+const VERSION=50;
 const PALETTES={"gray":{"ko":"그레이","bg":"#F7F7F8","user":"#F1F1F3","accent":"#A7ABB1","strong":"#4B5057","soft":"#EEEFF1","hover":"#E3E5E8","stroke":"#E1E3E6","icon":"#737780","scroll":"#C8CBD0","alt":"#FAFAFB"},"pink":{"ko":"연핑크","bg":"#FCF8FA","user":"#F8EDF1","accent":"#D8B7C5","strong":"#8D6576","soft":"#F7EDF2","hover":"#F0E1E8","stroke":"#EEDFE5","icon":"#9B7B88","scroll":"#DFC9D2","alt":"#FFFBFC"},"yellow":{"ko":"연노랑","bg":"#FCFBF5","user":"#F9F4E3","accent":"#D8C89A","strong":"#8B7951","soft":"#F7F3E5","hover":"#F0EAD7","stroke":"#EBE5D1","icon":"#98855D","scroll":"#DDD4B6","alt":"#FFFEF9"},"blue":{"ko":"연파랑","bg":"#F7FAFD","user":"#ECF3FA","accent":"#B3CDE3","strong":"#587B9B","soft":"#EDF4FA","hover":"#E1EDF7","stroke":"#DDE9F2","icon":"#7895AE","scroll":"#C8D9E8","alt":"#FBFDFF"},"green":{"ko":"연두","bg":"#F8FBF7","user":"#EFF6EA","accent":"#BED3B2","strong":"#6B8961","soft":"#F0F7EC","hover":"#E4EFE0","stroke":"#DFEADD","icon":"#81997B","scroll":"#CDDCC7","alt":"#FBFDFB"},"purple":{"ko":"연보라","bg":"#FAF8FD","user":"#F2EDFA","accent":"#C9B9E1","strong":"#7E6A9C","soft":"#F3EEFA","hover":"#EAE2F5","stroke":"#E7E0EF","icon":"#9485AB","scroll":"#D7CBE5","alt":"#FDFBFF"}};
 const chosen=window.__ccNextPalette;
 try{delete window.__ccNextPalette;}catch(e){}
@@ -20,23 +20,44 @@ const FRAME_CHAT=location.hostname==='frame.pingpong.ai';
 // Parent and scene are separate documents. Keep the original parent styles,
 // but never render chat-only floating controls in the outer room host.
 const OUTER_ROOM=!FRAME_CHAT && /^\/(?:[a-z]{2}(?:-[A-Z]{2})?\/)?rooms\/[^/]+/.test(location.pathname);
+
+// The outer Zeta page owns the stable /rooms/<id> route.
+// The iframe's #run value is temporary and may change after reload.
+let ccStableRoomKey='';
+function outerStableRoomKey(){
+ const match=location.pathname.match(/\/rooms\/([^/?#]+)/);
+ return match?'/rooms/'+match[1]:location.pathname;
+}
+
 // Cross-origin coordination between our own two userscript instances only.
 // No access to the other frame's DOM, Zeta data, or internal APIs.
-let ccFrameReadyAnnounced=false;
-function announceFrameControls(){
- if(!FRAME_CHAT||ccFrameReadyAnnounced)return;
+let ccLastFrameReadyAt=0;
+function announceFrameControls(force=false){
+ if(!FRAME_CHAT||ccStableRoomKey)return;
  if(!document.body?.classList.contains('cc-frame-chat-root'))return;
  const button=document.getElementById('cc-toggle');
  if(!button||!button.isConnected)return;
- ccFrameReadyAnnounced=true;
+ const now=Date.now();
+ if(!force&&now-ccLastFrameReadyAt<700)return;
+ ccLastFrameReadyAt=now;
  try{window.parent.postMessage({type:'clean-cozy-frame-controls-ready-v163'},'https://zeta-ai.io');}catch(e){}
 }
 function onCozyFrameReady(event){
  if(!OUTER_ROOM||event.origin!=='https://frame.pingpong.ai')return;
- if(event.data?.type!=='clean-cozy-frame-controls-ready-v163')return;
  const scene=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
  if(!scene||event.source!==scene.contentWindow)return;
- sendToCozyScene('settings',settings);document.documentElement.classList.add('cc-inner-controls-ready');
+ const data=event.data;
+ if(data?.type==='clean-cozy-frame-controls-ready-v163'){
+  const room=outerStableRoomKey();
+  sendToCozyScene('room-key',room);
+  sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
+  sendToCozyScene('settings',settings);
+  document.documentElement.classList.add('cc-inner-controls-ready');
+  return;
+ }
+ if(data?.type==='cc-private-ui-v164'&&data.command==='turn-sync'){
+  mergeOuterTurnStore(data.payload);
+ }
 }
 if(OUTER_ROOM)window.addEventListener('message',onCozyFrameReady);
 function sendToCozyScene(type, payload){
@@ -44,6 +65,10 @@ function sendToCozyScene(type, payload){
  const frame=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
  if(!frame?.contentWindow)return false;
  try{frame.contentWindow.postMessage({type:'cc-private-ui-v164',command:type,payload},'https://frame.pingpong.ai');return true;}catch(e){return false;}
+}
+function sendToCozyOuter(type,payload){
+ if(!FRAME_CHAT)return false;
+ try{window.parent.postMessage({type:'cc-private-ui-v164',command:type,payload},'https://zeta-ai.io');return true;}catch(e){return false;}
 }
 function receiveCozyUIMessage(event){
  if(!FRAME_CHAT||event.origin!=='https://zeta-ai.io'||event.source!==window.parent)return;
@@ -53,6 +78,19 @@ function receiveCozyUIMessage(event){
  else if(data.command==='line'){pressLineTool();}
  else if(data.command==='action'&&['snapshot','report','request','regen','suggest'].includes(data.payload)){
   availableNativeAction(data.payload)?.click();
+ }else if(data.command==='room-key'&&typeof data.payload==='string'){
+  const next=data.payload.trim();
+  if(/^\/rooms\/[^/?#]+$/.test(next)){
+   const changed=ccStableRoomKey!==next;
+   const previous=turnRoomKey();
+   ccStableRoomKey=next;
+   if(changed&&previous&&previous!==next)migrateTurnRoomKey(previous,next);
+   if(changed)resetTurnRoom();
+   enhanceDates();
+   syncTurnStoreToOuter();
+  }
+ }else if(data.command==='turn-store'&&data.payload&&typeof data.payload==='object'){
+  receiveOuterTurnStore(data.payload);
  }else if(data.command==='settings'&&data.payload&&typeof data.payload==='object'){
   const p=data.payload;
   if(['both','none','userHidden','userHiddenHeart'].includes(p.avatarMode))settings.avatarMode=p.avatarMode;
@@ -1763,7 +1801,9 @@ body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer
 }
 body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] .cc-meta-time,
 body.cc-frame-chat-root [role="log"] [data-sentry-component="ChatBubbleContainer"] .cc-meta-date{
- font-size:11px!important;color:var(--cc-muted)!important;
+ font-size:11px!important;
+ color:#A0A3A9!important;
+ -webkit-text-fill-color:#A0A3A9!important;
 }
 body.cc-frame-chat-root #cc-toggle,body.cc-frame-chat-root #cc-edit-shortcut,
 body.cc-frame-chat-root #cc-line-shortcut{z-index:2147483000!important;visibility:visible!important;display:flex!important;}
@@ -2240,9 +2280,85 @@ const TURN_STORE='zeta-clean-cozy-turn-dates-v1';
 const TURN_LIMIT=300;
 let turns=[];
 try{
+ // On zeta-ai.io this is the authoritative persistent store.
+ // In the iframe this is read only once as a migration source for v1.7.2.
  const loaded=JSON.parse(localStorage.getItem(TURN_STORE)||'[]');
  if(Array.isArray(loaded))turns=loaded.filter(x=>x&&typeof x==='object'&&typeof x.room==='string'&&typeof x.time==='string'&&typeof x.user==='string').slice(-TURN_LIMIT);
 }catch(e){}
+
+function normalizeTurnScopedKey(value,room){
+ if(typeof value!=='string')return value;
+ const split=value.indexOf('::');
+ return split>=0?room+'::'+value.slice(split+2):value;
+}
+function cleanTurnRows(list,room){
+ if(!Array.isArray(list))return [];
+ const clean=[];
+ for(const row of list){
+  if(!row||row.room!==room||typeof row.time!=='string'||typeof row.user!=='string')continue;
+  const copy={room,user:normalizeTurnScopedKey(row.user,room),time:row.time};
+  if(Number.isFinite(Number(row.userIndex)))copy.userIndex=Number(row.userIndex);
+  if(typeof row.character==='string')copy.character=normalizeTurnScopedKey(row.character,room);
+  if(Array.isArray(row.characters)){
+   copy.characters=[...new Set(row.characters
+    .filter(v=>typeof v==='string')
+    .map(v=>normalizeTurnScopedKey(v,room)))];
+  }
+  clean.push(copy);
+ }
+ return clean.slice(-TURN_LIMIT);
+}
+function mergeTurnRows(base,incoming){
+ const merged=base.map(row=>({...row,characters:Array.isArray(row.characters)?[...row.characters]:row.characters}));
+ for(const row of incoming){
+  const found=merged.find(x=>
+   x.room===row.room&&(
+    x.user===row.user||
+    (Number.isFinite(x.userIndex)&&Number.isFinite(row.userIndex)&&x.userIndex===row.userIndex)
+   )
+  );
+  if(!found){merged.push(row);continue;}
+  if(!found.time&&row.time)found.time=row.time;
+  if(Number.isFinite(row.userIndex))found.userIndex=row.userIndex;
+  if(row.user)found.user=row.user;
+  if(!found.character&&row.character)found.character=row.character;
+  const chars=new Set([
+   ...(Array.isArray(found.characters)?found.characters:[]),
+   ...(found.character?[found.character]:[]),
+   ...(Array.isArray(row.characters)?row.characters:[]),
+   ...(row.character?[row.character]:[])
+  ]);
+  if(chars.size)found.characters=[...chars];
+ }
+ return merged.slice(-TURN_LIMIT);
+}
+function roomTurnRows(room){
+ return turns.filter(row=>row.room===room);
+}
+function syncTurnStoreToOuter(){
+ if(!FRAME_CHAT||!/^\/rooms\/[^/?#]+$/.test(turnRoomKey()))return false;
+ return sendToCozyOuter('turn-sync',{room:turnRoomKey(),turns:roomTurnRows(turnRoomKey())});
+}
+function mergeOuterTurnStore(payload){
+ if(FRAME_CHAT||!OUTER_ROOM||!payload||typeof payload!=='object')return;
+ const room=typeof payload.room==='string'?payload.room.trim():'';
+ if(!/^\/rooms\/[^/?#]+$/.test(room)||room!==outerStableRoomKey())return;
+ const incoming=cleanTurnRows(payload.turns,room);
+ turns=mergeTurnRows(turns,incoming);
+ saveTurns();
+ sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
+}
+function receiveOuterTurnStore(payload){
+ if(!FRAME_CHAT||!payload||typeof payload!=='object')return;
+ const room=typeof payload.room==='string'?payload.room.trim():'';
+ if(!room||room!==ccStableRoomKey)return;
+ const incoming=cleanTurnRows(payload.turns,room);
+ const current=cleanTurnRows(roomTurnRows(room),room);
+ if(JSON.stringify(current)===JSON.stringify(incoming))return;
+ turns=[...turns.filter(row=>row.room!==room),...incoming].slice(-TURN_LIMIT);
+ resetTurnRoom();
+ enhanceDates();
+}
 let turnPending=null;
 let dateRefreshTimer=null;
 let turnRoomPath='';
@@ -2252,12 +2368,30 @@ const liveTurnTimes=new WeakMap();
 function currentRoomMessageBodies(){
  return document.querySelectorAll(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"])');
 }
-// The iframe's URL has a per-run identifier; its pathname alone is shared by all
-// rooms. This keeps different chats from sharing the same local timestamps.
+// Use the stable outer /rooms/<id> route whenever available.
+// The iframe #run value is only a temporary fallback during initial hydration.
 function turnRoomKey(){
- if(!FRAME_CHAT)return location.pathname;
+ if(!FRAME_CHAT)return OUTER_ROOM?outerStableRoomKey():location.pathname;
+ if(ccStableRoomKey)return ccStableRoomKey;
  const run=location.hash.match(/(?:^#|[&?])run=([^&]+)/)?.[1]||'';
  return location.origin+location.pathname+'#run='+run;
+}
+
+function migrateTurnScopedKey(value,oldKey,newKey){
+ if(typeof value!=='string')return value;
+ return value.startsWith(oldKey+'::')?newKey+value.slice(oldKey.length):value;
+}
+function migrateTurnRoomKey(oldKey,newKey){
+ let changed=false;
+ for(const row of turns){
+  if(row.room!==oldKey)continue;
+  row.room=newKey;
+  row.user=migrateTurnScopedKey(row.user,oldKey,newKey);
+  if(typeof row.character==='string')row.character=migrateTurnScopedKey(row.character,oldKey,newKey);
+  if(Array.isArray(row.characters))row.characters=row.characters.map(v=>migrateTurnScopedKey(v,oldKey,newKey));
+  changed=true;
+ }
+ if(changed)saveTurns();
 }
 function viewOf(body){return body.closest('[data-sentry-component="BodyView"]')||(FRAME_CHAT?body:null);}
 function rowOf(body){return viewOf(body)?.closest('[data-index]');}
@@ -2295,23 +2429,51 @@ function beginTurnCapture(iso){
 }
 function saveTurns(){
  if(turns.length>TURN_LIMIT)turns=turns.slice(-TURN_LIMIT);
+ if(FRAME_CHAT){
+  // The iframe keeps only the in-memory working copy.
+  // Persistent writes live on zeta-ai.io so Safari refreshes do not lose them.
+  syncTurnStoreToOuter();
+  return;
+ }
  try{localStorage.setItem(TURN_STORE,JSON.stringify(turns));}catch(e){}
 }
 function recordUserTurn(body,time){
  const user=scopedKey(body);
  if(!user)return null;
- const existing=turns.find(x=>x.room===turnRoomKey()&&x.user===user);
- if(existing)return existing;
+ const index=rowIndex(body);
+ const existing=turns.find(x=>
+  x.room===turnRoomKey()&&(
+   x.user===user||
+   (Number.isFinite(index)&&Number.isFinite(x.userIndex)&&x.userIndex===index)
+  )
+ );
+ if(existing){
+  let changed=false;
+  if(existing.user!==user){existing.user=user;changed=true;}
+  if(Number.isFinite(index)&&existing.userIndex!==index){existing.userIndex=index;changed=true;}
+  if(changed)saveTurns();
+  return existing;
+ }
  const record={room:turnRoomKey(),user,time};
+ if(Number.isFinite(index))record.userIndex=index;
  turns.push(record);
  saveTurns();
  return record;
 }
 function turnForBody(body){
  const key=scopedKey(body);
- if(!key)return null;
  const isUser=body.matches('[data-sentry-component="RightTextContent"]');
- return turns.find(x=>x.room===turnRoomKey()&&(isUser?x.user===key:(x.character===key||x.characters?.includes(key))))||null;
+ const index=rowIndex(body);
+ if(isUser){
+  return turns.find(x=>x.room===turnRoomKey()&&(
+   (key&&x.user===key)||
+   (Number.isFinite(index)&&Number.isFinite(x.userIndex)&&x.userIndex===index)
+  ))||null;
+ }
+ return turns.find(x=>x.room===turnRoomKey()&&(
+  (key&&(x.character===key||x.characters?.includes(key)))||
+  (Number.isFinite(index)&&Number.isFinite(x.userIndex)&&index>x.userIndex&&index-x.userIndex<=2)
+ ))||null;
 }
 function turnStampForBody(body){
  const view=viewOf(body);
@@ -2385,12 +2547,27 @@ function enhanceDates(){
    const match=nearestUserTurn(body);
    if(match){
     liveTurnTimes.set(view,match.time);
-    if(key&&match.character!==key){match.character=key;saveTurns();}
+    if(key){
+     let changed=false;
+     if(!match.character){match.character=key;changed=true;}
+     if(!Array.isArray(match.characters))match.characters=[];
+     if(!match.characters.includes(key)){match.characters.push(key);changed=true;}
+     if(changed)saveTurns();
+    }
    }
   }
  }
  for(const body of bodies){
   const view=viewOf(body),key=scopedKey(body);
+  if(body.matches('[data-sentry-component="RightTextContent"]')){
+   const matched=turnForBody(body);
+   const idx=rowIndex(body);
+   if(matched&&Number.isFinite(idx)&&matched.userIndex!==idx){
+    matched.userIndex=idx;
+    if(key)matched.user=key;
+    saveTurns();
+   }
+  }
   if(view)knownViewElements.add(view);
   if(key)knownViewKeys.add(key);
   const bubble=body.querySelector('[data-sentry-component="ChatBubbleContainer"]');
@@ -2833,5 +3010,5 @@ function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove(
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
