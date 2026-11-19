@@ -3300,6 +3300,7 @@ function captureCharacterIdentity(){
  if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
  return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
 }
+/* capture alias: 3글자 이상 한글 유저명은 뒤 2글자도 {{user}}로 가림 */
 function captureUserIdentity(){
  const right=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="RightTextContent"]');
  const candidates=[
@@ -3308,7 +3309,10 @@ function captureUserIdentity(){
   right?.querySelector('.caption1')?.textContent?.trim(),
   FRAME_CHAT&&right?frameName(right):''
  ].filter(captureValidName);
- return [...new Set(candidates)].sort((a,b)=>b.length-a.length);
+ const full=candidates[0]||'';
+ const aliases=new Set(candidates);
+ if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
+ return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
 }
 function escapeCaptureRegExp(value){
  return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
