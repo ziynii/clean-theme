@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      66.0-integrated
+// @version      80.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -3862,7 +3862,10 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   // 기능/디자인을 건드리지 않고 드래그 후보에서만 제외한다.
   function isProtectedCozyNode(node) {
     if (!(node instanceof Element)) return false;
-    return !!node.closest?.('#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut,#cc-panel,#cc-settings-backdrop');
+    return !!node.closest?.(
+      '#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut,#cc-panel,#cc-settings-backdrop,' +
+      '[role="log"][aria-label="Chat messages"],[data-testid="composer-input-box"]'
+    );
   }
 
   function isUsableElement(element) {
@@ -4291,9 +4294,20 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
       if (Array.isArray(parsed)) rows = parsed;
     } catch (_) {}
+    let cleaned = false;
     rows.forEach(row => {
-      if (row?.id && (row.kind === 'single' || row.kind === 'group')) savedEntries.set(String(row.id), row);
+      if (!row?.id || (row.kind !== 'single' && row.kind !== 'group')) return;
+      const label = String(row.label || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const descText = JSON.stringify(row.desc || row.containerDesc || row.children || {}).toLowerCase();
+      if (label === 'chat messages' || descText.includes('"aria-label":"chat messages"')) {
+        cleaned = true;
+        return;
+      }
+      savedEntries.set(String(row.id), row);
     });
+    if (cleaned) {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify([...savedEntries.values()])); } catch (_) {}
+    }
   }
 
   function actionIdForSingle(desc) {
@@ -4605,6 +4619,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
   function registerSingle(element, shell = null) {
     if (!(element instanceof HTMLElement) || isOwnNode(element) || isProtectedCozyNode(element)) return;
+    if (element.matches?.('[role="log"][aria-label="Chat messages"]') || element.closest?.('[role="log"][aria-label="Chat messages"]')) return;
     if (!(shell instanceof HTMLElement) || isOwnNode(shell) || isProtectedCozyNode(shell)) shell = element;
     const desc = describeElement(element);
     const hideDesc = shell === element ? null : describeElement(shell);
