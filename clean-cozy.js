@@ -44,12 +44,8 @@ function onCozyFrameReady(event){
  if(!scene||event.source!==scene.contentWindow)return;
  const data=event.data;
  if(data?.type==='clean-cozy-frame-controls-ready-v163'){
-  // The scene may already hold the user's latest choices from an older version.
-  // Adopt those first so a reload cannot overwrite them with outer defaults.
-  if(data.settings&&typeof data.settings==='object'){
-   absorbSettings(data.settings);
-   persistSettingsLocal();
-  }
+  // The outer zeta-ai.io document is the source of truth for saved UI settings.
+  // Do not let the iframe's startup/default snapshot overwrite persisted choices.
   const room=outerStableRoomKey();
   sendToCozyScene('room-key',room);
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
