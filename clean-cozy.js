@@ -3501,18 +3501,22 @@ function restoreCaptureMode(){
 function restoreCapturePlaceholders(){
  const charName=captureIdentity.charNames.find(name=>name&&name!=='{{char}}')||'';
  const userName=captureIdentity.userNames.find(name=>name&&name!=='{{user}}')||'';
- const roots=[];
- const log=captureLog();
- if(log)roots.push(log);
- const header=document.querySelector('[data-testid="chat-header-profile"]');
- if(header)roots.push(header);
 
- for(const root of roots){
+ // Do NOT sweep message text here.
+ // Alias text such as "미정" is intentionally masked as {{user}} during capture,
+ // and its exact original spelling is restored by restoreCaptureNode().
+ // A global {{user}} -> full-name replacement would wrongly turn "미정" into "김미정".
+ const nameRoots=[
+  ...document.querySelectorAll('.cc-meta-name'),
+  document.querySelector('[data-testid="chat-header-profile"]')
+ ].filter(Boolean);
+
+ for(const root of nameRoots){
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
   let node;
   while((node=walker.nextNode())){
    if(!captureNodeAllowed(node))continue;
-   let value=node.nodeValue||'';
+   const value=node.nodeValue||'';
    let restored=value;
    if(charName)restored=restored.replace(/\{\{char\}\}/g,charName);
    if(userName)restored=restored.replace(/\{\{user\}\}/g,userName);
