@@ -3387,14 +3387,33 @@ function captureRowSnapshotKey(row){
  const side=row.matches('[data-sentry-component="RightTextContent"]')?'u':'c';
  const indexed=row.closest('[data-index]');
  const index=indexed?.getAttribute('data-index');
- if(index!==null&&index!==undefined&&index!=='')return side+':idx:'+index;
- const log=captureLog();
- if(!log)return '';
- const rows=[...log.querySelectorAll(
-  '[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]'
- )];
- const pos=rows.indexOf(row);
- return pos>=0?side+':pos:'+pos:'';
+ // Only use Zeta's rendered stable index. Never fall back to visual row position:
+ // React can insert/recycle rows and make pos-based restoration hit a different message.
+ return (index!==null&&index!==undefined&&index!=='')?side+':idx:'+index:'';
+}
+function captureNameTokens(value){
+ const source=String(value||'');
+ const names=[
+  ...captureIdentity.charNames.map(name=>({name,placeholder:'{{char}}'})),
+  ...captureIdentity.userNames.map(name=>({name,placeholder:'{{user}}'}))
+ ].filter(item=>item.name&&item.name!==item.placeholder)
+  .sort((a,b)=>b.name.length-a.name.length);
+
+ const tokens=[];
+ let i=0;
+ while(i<source.length){
+  let hit=null;
+  for(const item of names){
+   if(source.startsWith(item.name,i)){hit=item;break;}
+  }
+  if(hit){
+   tokens.push({placeholder:hit.placeholder,original:hit.name});
+   i+=hit.name.length;
+  }else{
+   i+=1;
+  }
+ }
+ return tokens;
 }
 function rememberCaptureRowSnapshot(row){
  const key=captureRowSnapshotKey(row);
@@ -3406,7 +3425,7 @@ function rememberCaptureRowSnapshot(row){
   if(!captureNodeAllowed(node))continue;
   const original=node.nodeValue||'';
   const masked=replaceCaptureNames(original);
-  if(masked!==original)entries.push({original,masked});
+  if(masked!==original)entries.push({original,masked,tokens:captureNameTokens(original)});
  }
  if(entries.length)captureRowSnapshots.set(key,entries);
 }
@@ -3432,27 +3451,43 @@ function restoreCaptureRowSnapshots(){
   if(!currentNodes.length)continue;
 
   const unused=saved.map((entry,index)=>({entry,index,used:false}));
+
+  // Pass 1: exact whole-node restoration when React kept the same text shape.
   for(const currentNode of currentNodes){
    const value=currentNode.nodeValue||'';
-
-   // Prefer an exact masked-string match; this preserves full name vs alias.
-   let hit=unused.find(item=>!item.used&&item.entry.masked===value);
-
-   // Fallback only by placeholder kind/order when React changed surrounding markup.
-   if(!hit){
-    const wantsChar=value.includes('{{char}}');
-    const wantsUser=value.includes('{{user}}');
-    hit=unused.find(item=>{
-     if(item.used)return false;
-     const masked=item.entry.masked;
-     return (!wantsChar||masked.includes('{{char}}'))&&
-            (!wantsUser||masked.includes('{{user}}'));
-    });
-   }
-
+   const hit=unused.find(item=>!item.used&&item.entry.masked===value);
    if(hit){
     currentNode.nodeValue=hit.entry.original;
     hit.used=true;
+   }
+  }
+
+  // Pass 2: React/markdown may split or merge text nodes. For placeholders that
+  // remain, restore ONLY the placeholder token itself, never the whole sentence.
+  // Tokens come only from unused snapshots of this same stable data-index row.
+  const tokenQueue=unused
+   .filter(item=>!item.used)
+   .flatMap(item=>Array.isArray(item.entry.tokens)?item.entry.tokens:[]);
+
+  if(tokenQueue.length){
+   let tokenPos=0;
+   const walker2=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+   let node2;
+   while((node2=walker2.nextNode())){
+    if(!captureNodeAllowed(node2))continue;
+    let value=node2.nodeValue||'';
+    if(!value.includes('{{char}}')&&!value.includes('{{user}}'))continue;
+
+    value=value.replace(/\{\{char\}\}|\{\{user\}\}/g,(placeholder)=>{
+     for(let i=tokenPos;i<tokenQueue.length;i++){
+      const token=tokenQueue[i];
+      if(token.placeholder!==placeholder)continue;
+      tokenPos=i+1;
+      return token.original;
+     }
+     return placeholder;
+    });
+    node2.nodeValue=value;
    }
   }
  }
