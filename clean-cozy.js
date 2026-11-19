@@ -3265,6 +3265,10 @@ let captureButton=null;
 let captureIdentity={charNames:[],userNames:[]};
 const captureOriginals=new WeakMap();
 const captureNodes=new Set();
+/* React can replace masked text nodes while capture mode is active.
+   Keep an exact per-row snapshot so fresh {{char}}/{{user}} nodes can still
+   be restored to the original spelling (e.g. 설기 / 지연), not guessed. */
+const captureRowSnapshots=new Map();
 const captureAllowedTurns=new Set();
 const captureSeenTurns={up:new Set(),down:new Set()};
 let captureScrollRoot=null;
@@ -3378,7 +3382,83 @@ function captureVisibleTurns(turns){
   return rect.bottom>viewport.top+2 && rect.top<viewport.bottom-2;
  }));
 }
+function captureRowSnapshotKey(row){
+ if(!(row instanceof HTMLElement))return '';
+ const side=row.matches('[data-sentry-component="RightTextContent"]')?'u':'c';
+ const indexed=row.closest('[data-index]');
+ const index=indexed?.getAttribute('data-index');
+ if(index!==null&&index!==undefined&&index!=='')return side+':idx:'+index;
+ const log=captureLog();
+ if(!log)return '';
+ const rows=[...log.querySelectorAll(
+  '[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]'
+ )];
+ const pos=rows.indexOf(row);
+ return pos>=0?side+':pos:'+pos:'';
+}
+function rememberCaptureRowSnapshot(row){
+ const key=captureRowSnapshotKey(row);
+ if(!key||captureRowSnapshots.has(key))return;
+ const entries=[];
+ const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+ let node;
+ while((node=walker.nextNode())){
+  if(!captureNodeAllowed(node))continue;
+  const original=node.nodeValue||'';
+  const masked=replaceCaptureNames(original);
+  if(masked!==original)entries.push({original,masked});
+ }
+ if(entries.length)captureRowSnapshots.set(key,entries);
+}
+function restoreCaptureRowSnapshots(){
+ const log=captureLog();
+ if(!log)return;
+ const rows=[...log.querySelectorAll(
+  '[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]'
+ )];
+ for(const row of rows){
+  const key=captureRowSnapshotKey(row);
+  const saved=key?captureRowSnapshots.get(key):null;
+  if(!saved?.length)continue;
+
+  const currentNodes=[];
+  const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+  let node;
+  while((node=walker.nextNode())){
+   if(!captureNodeAllowed(node))continue;
+   const value=node.nodeValue||'';
+   if(value.includes('{{char}}')||value.includes('{{user}}'))currentNodes.push(node);
+  }
+  if(!currentNodes.length)continue;
+
+  const unused=saved.map((entry,index)=>({entry,index,used:false}));
+  for(const currentNode of currentNodes){
+   const value=currentNode.nodeValue||'';
+
+   // Prefer an exact masked-string match; this preserves full name vs alias.
+   let hit=unused.find(item=>!item.used&&item.entry.masked===value);
+
+   // Fallback only by placeholder kind/order when React changed surrounding markup.
+   if(!hit){
+    const wantsChar=value.includes('{{char}}');
+    const wantsUser=value.includes('{{user}}');
+    hit=unused.find(item=>{
+     if(item.used)return false;
+     const masked=item.entry.masked;
+     return (!wantsChar||masked.includes('{{char}}'))&&
+            (!wantsUser||masked.includes('{{user}}'));
+    });
+   }
+
+   if(hit){
+    currentNode.nodeValue=hit.entry.original;
+    hit.used=true;
+   }
+  }
+ }
+}
 function maskCaptureRow(row){
+ rememberCaptureRowSnapshot(row);
  const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
  let node;
  while((node=walker.nextNode())){
@@ -3497,6 +3577,7 @@ function unbindCaptureScroll(){
 }
 function restoreCaptureMode(){
  for(const node of [...captureNodes])restoreCaptureNode(node);
+ restoreCaptureRowSnapshots();
 }
 function restoreCapturePlaceholders(){
  const charName=captureIdentity.charNames.find(name=>name&&name!=='{{char}}')||'';
@@ -3555,6 +3636,7 @@ function setCaptureMode(enabled){
   captureAllowedTurns.clear();
   captureSeenTurns.up.clear();
   captureSeenTurns.down.clear();
+  captureRowSnapshots.clear();
   captureMode=true;
 
   // Activation screen is the fixed anchor. Mask every turn visible right now.
@@ -3574,6 +3656,7 @@ function setCaptureMode(enabled){
   captureAllowedTurns.clear();
   captureSeenTurns.up.clear();
   captureSeenTurns.down.clear();
+  captureRowSnapshots.clear();
   captureIdentity={charNames:[],userNames:[]};
   schedule();
  }
@@ -3889,7 +3972,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureRowSnapshots.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
