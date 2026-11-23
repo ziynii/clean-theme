@@ -74,32 +74,45 @@ function ccStopFrameReadyPoll(){
  ccFrameReadyPollDeadline=0;
 }
 
+function ccStartupRepairPass(){
+ if(ccStopped||!FRAME_CHAT||!ccRuntimeStarted)return;
+ if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
+
+ // Startup-only repair pass. Re-run only the visible/core DOM work that can be
+ // lost when iOS Safari / Zeta replaces hydrated nodes during the first seconds.
+ markFrameChatRoot();
+ ccAttachLogScrollRecovery();
+ ccEnsureFloatingControls();
+ enhance();
+ enhanceHeader();
+ updateDialogueHighlight();
+ makeSendArrow();
+ ccApplyCaptureMode();
+ announceFrameControls();
+ announceFrameCoreReady();
+}
+
 function ccStartFrameReadyPoll(){
  if(!FRAME_CHAT||ccFrameCoreReadySent||ccFrameReadyPollTimer)return;
- ccFrameReadyPollDeadline=performance.now()+6000;
+
+ // Keep actively repairing only during startup. This watchdog is temporary and
+ // disappears immediately after the frame reports a complete themed state.
+ ccFrameReadyPollDeadline=performance.now()+10000;
+
+ ccStartupRepairPass();
+
  ccFrameReadyPollTimer=setInterval(()=>{
   if(ccStopped||ccFrameCoreReadySent){
    ccStopFrameReadyPoll();
    return;
   }
 
-  announceFrameCoreReady();
+  ccStartupRepairPass();
 
-  // One final visible-theme pass before giving up the temporary startup poll.
   if(performance.now()>=ccFrameReadyPollDeadline){
    ccStopFrameReadyPoll();
-   if(ccStopped||ccFrameCoreReadySent)return;
-   if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
-   markFrameChatRoot();
-   ccEnsureFloatingControls();
-   enhance();
-   enhanceHeader();
-   updateDialogueHighlight();
-   makeSendArrow();
-   ccApplyCaptureMode();
-   announceFrameCoreReady();
   }
- },120);
+ },320);
 }
 
 function ccFrameThemeLooksReady(){
@@ -613,7 +626,7 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">UI가 틀어진다면 새로고침 해주세요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
- ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7200);
+ ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),9000);
 }
 function hideThemeLoadingScreen(){
  const screen=ccThemeLoadingScreen;
@@ -2838,7 +2851,7 @@ body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] bu
  color:var(--cc-accent-strong)!important;-webkit-text-fill-color:var(--cc-accent-strong)!important;
 }
 `;
-let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,observer=null,scheduled=false,scheduleRaf=0,ccStopped=false;
+let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,helpBackdrop=null,helpDialog=null,observer=null,scheduled=false,scheduleRaf=0,ccStopped=false;
 const sendOriginals=new Map();
 function makeSendArrow(){
  const svg=document.querySelector('[data-testid="chat-send-button"] svg');
@@ -2984,10 +2997,14 @@ let dialogueUpdating=false;
 const dialogueChatSignature=new WeakMap();
 function clearInlineDialogue(){
  const spans=document.querySelectorAll('span.'+dialogueInlineClass);
+ const chats=new Set();
  for(const span of spans){
   if(!span.isConnected)continue;
+  const chat=span.closest('.chat');
+  if(chat)chats.add(chat);
   span.replaceWith(...Array.from(span.childNodes));
  }
+ for(const chat of chats)dialogueChatSignature.delete(chat);
 }
 function updateDialogueHighlight(){
  if(!settings.dialogueHighlight || dialogueUpdating)return;
@@ -3000,10 +3017,17 @@ function updateDialogueHighlight(){
    '[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"] .chat'
   );
   for(const chat of chats){
-   // Skip chats whose rendered text has not changed since the last successful pass.
-   // This avoids running a TreeWalker over every old message on every DOM mutation.
+   // Skip only when both the text AND the exact wrappers created by the
+   // previous successful pass are still mounted in this chat. Zeta/React can
+   // rebuild a chat's children while keeping the same .chat element/text.
    const rawText=chat.textContent||'';
-   if(dialogueChatSignature.get(chat)===rawText)continue;
+   const cachedDialogue=dialogueChatSignature.get(chat);
+   if(
+    cachedDialogue?.text===rawText &&
+    Array.isArray(cachedDialogue.spans) &&
+    cachedDialogue.spans.length>0 &&
+    cachedDialogue.spans.every(span=>span?.isConnected && chat.contains(span))
+   )continue;
 
    // Loading indicators in a *different* Swiper slide must not block
    // completed dialogue in this slide. Zeta keeps the next-slide spinner
@@ -3030,7 +3054,10 @@ function updateDialogueHighlight(){
     textNode.parentNode.insertBefore(span,textNode);
     span.appendChild(textNode);
    }
-   dialogueChatSignature.set(chat,rawText);
+   dialogueChatSignature.set(chat,{
+    text:rawText,
+    spans:[...chat.querySelectorAll('span.'+dialogueInlineClass)]
+   });
   }
  }catch(error){console.warn('[Clean Cozy] 형광펜 적용 중 오류',error);}
  finally{dialogueUpdating=false;}
@@ -4269,6 +4296,7 @@ function schedule(){
   if(ccStopped)return;
   if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
   markFrameChatRoot();
+  ccAttachLogScrollRecovery();
   ccEnsureFloatingControls();
   finishPendingLineEdit();
   enhance();
@@ -4519,12 +4547,12 @@ function makeControls(){
  panel.appendChild(saveWrap);
  updateSettingsSaveButton();
 
- const helpBackdrop=document.createElement('div');
+ helpBackdrop=document.createElement('div');
  helpBackdrop.id='cc-help-backdrop';
  helpBackdrop.hidden=true;
  helpBackdrop.setAttribute('aria-hidden','true');
 
- const helpDialog=document.createElement('div');
+ helpDialog=document.createElement('div');
  helpDialog.id='cc-help-dialog';
  helpDialog.hidden=true;
  helpDialog.setAttribute('role','dialog');
@@ -4613,7 +4641,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();ccStopFrameReadyPoll();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){ccStopped=true;ccRuntimeStarted=false;ccDetachLogScrollRecovery();if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();ccStopFrameReadyPoll();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();helpBackdrop=null;helpDialog=null;actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4627,6 +4655,64 @@ document.addEventListener('keydown',onSendKey,true);
 let ccRuntimeStarted=false;
 let ccBootstrapObserver=null;
 let ccStartupTimers=[];
+let ccLogScrollTarget=null;
+let ccLogScrollRaf=0;
+
+function ccFrameClassSignature(value){
+ return String(value||'')
+  .split(/\s+/)
+  .filter(cls=>cls && !cls.startsWith('cc-'))
+  .sort()
+  .join(' ');
+}
+
+function ccMeaningfulFrameClassMutation(record){
+ if(!FRAME_CHAT||record?.type!=='attributes'||record.attributeName!=='class')return false;
+ const target=record.target;
+ if(!(target instanceof Element))return false;
+
+ const inRelevantUI=
+  target.matches?.('[role="log"][aria-label="Chat messages"],header,[data-testid="composer-input-box"]') ||
+  target.closest?.('[role="log"][aria-label="Chat messages"],header,[data-testid="composer-input-box"]');
+
+ if(!inRelevantUI)return false;
+ return ccFrameClassSignature(record.oldValue)!==ccFrameClassSignature(target.getAttribute('class'));
+}
+
+function ccRunScrollRecovery(){
+ ccLogScrollRaf=0;
+ if(ccStopped||!FRAME_CHAT)return;
+ if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
+ markFrameChatRoot();
+ enhance();
+ updateDialogueHighlight();
+}
+
+function ccAttachLogScrollRecovery(){
+ if(!FRAME_CHAT)return;
+ const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
+ if(log===ccLogScrollTarget)return;
+
+ if(ccLogScrollTarget)ccLogScrollTarget.removeEventListener('scroll',ccOnLogScroll,{passive:true});
+ ccLogScrollTarget=log||null;
+ if(ccLogScrollTarget)ccLogScrollTarget.addEventListener('scroll',ccOnLogScroll,{passive:true});
+}
+
+function ccOnLogScroll(){
+ if(ccStopped||ccLogScrollRaf)return;
+ ccLogScrollRaf=requestAnimationFrame(ccRunScrollRecovery);
+}
+
+function ccDetachLogScrollRecovery(){
+ if(ccLogScrollRaf){
+  cancelAnimationFrame(ccLogScrollRaf);
+  ccLogScrollRaf=0;
+ }
+ if(ccLogScrollTarget){
+  ccLogScrollTarget.removeEventListener('scroll',ccOnLogScroll,{passive:true});
+  ccLogScrollTarget=null;
+ }
+}
 
 function ccHasEssentialChatDOM(){
  if(!FRAME_CHAT)return true;
@@ -4646,6 +4732,7 @@ function ccStartRuntimeOnce(){
 
  if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
  markFrameChatRoot();
+ ccAttachLogScrollRecovery();
  applyOpts();
 
  // Chat-only floating controls are created only inside the real scene iframe.
@@ -4671,14 +4758,32 @@ function ccStartRuntimeOnce(){
 
  observer=new MutationObserver(records=>{
   ccMarkZetaRowsDirty(records);
-  schedule();
+
+  let needsSchedule=false;
+  for(const record of records){
+   if(record.type==='childList'){
+    needsSchedule=true;
+    break;
+   }
+   if(ccMeaningfulFrameClassMutation(record)){
+    needsSchedule=true;
+    break;
+   }
+  }
+  if(needsSchedule)schedule();
  });
- observer.observe(document.documentElement,{childList:true,subtree:true});
+ observer.observe(document.documentElement,{
+  childList:true,
+  subtree:true,
+  attributes:true,
+  attributeFilter:['class'],
+  attributeOldValue:true
+ });
 
  // Zeta can finish hydrating message rows after the chat log/composer already exist.
  // Re-run the normal DOM pass a few times during startup only; no permanent polling.
- ccStartupTimers=[300,700,1400,2500,4000].map(ms=>setTimeout(()=>{
-  if(ccRuntimeStarted&&!ccStopped) schedule();
+ ccStartupTimers=[450,1200,2600].map(ms=>setTimeout(()=>{
+  if(ccRuntimeStarted&&!ccStopped&&!ccFrameCoreReadySent)ccStartupRepairPass();
  },ms));
 
  dateRefreshTimer=setInterval(()=>{
@@ -4785,7 +4890,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let remoteGeometry = null;
   let remoteControlGeometry = null;
   let remoteDragHover = false;
-  let geometryInterval = 0;
+  let geometryRaf = 0;
 
   try { w[INSTANCE]?.destroy?.(); } catch (_) {}
 
@@ -4803,6 +4908,9 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const actions = new Map();
   const savedEntries = new Map();
   const watchedRoots = new WeakSet();
+  let openRootsCache = [d];
+  let openRootsCacheAt = 0;
+  const OPEN_ROOTS_CACHE_MS = 1600;
 
   let host = null;
   let shadow = null;
@@ -4813,7 +4921,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let toastNode = null;
   let observer = null;
   let scanTimer = 0;
-  let restoreInterval = 0;
   let open = false;
   let managing = false;
   let launcherDrag = null;
@@ -5026,7 +5133,15 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     return JSON.stringify(desc || {});
   }
 
-  function allOpenRoots() {
+  function allOpenRoots(force = false) {
+    const now = performance.now();
+    if (!force && openRootsCache.length && now - openRootsCacheAt < OPEN_ROOTS_CACHE_MS) {
+      openRootsCache = openRootsCache.filter(root =>
+        root === d || (root instanceof ShadowRoot && root.host?.isConnected)
+      );
+      return openRootsCache;
+    }
+
     const roots = [d];
     const seen = new Set(roots);
     for (let i = 0; i < roots.length; i += 1) {
@@ -5039,6 +5154,9 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         }
       });
     }
+
+    openRootsCache = roots;
+    openRootsCacheAt = now;
     return roots;
   }
 
@@ -5574,16 +5692,25 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     if (entry.kind === 'single') {
       const element = resolveDescriptor(entry.desc);
-      if (!(element instanceof HTMLElement)) return false;
-      const shell = entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null;
+      if (!(element instanceof HTMLElement) || isOwnNode(element) || isProtectedCozyNode(element)) return false;
+
+      let shell = entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null;
+      if (!(shell instanceof HTMLElement) || isOwnNode(shell) || isProtectedCozyNode(shell)) shell = element;
+
       actions.set(entry.id, buildSingleAction(entry, element, shell));
       return true;
     }
 
     if (entry.kind === 'group') {
       const elements = (entry.children || []).map(child => resolveDescriptor(child.desc));
-      if (elements.length < 2 || elements.some(el => !(el instanceof HTMLElement))) return false;
-      const container = entry.containerDesc ? resolveDescriptor(entry.containerDesc) : null;
+      if (
+        elements.length < 2 ||
+        elements.some(el => !(el instanceof HTMLElement) || isOwnNode(el) || isProtectedCozyNode(el))
+      ) return false;
+
+      let container = entry.containerDesc ? resolveDescriptor(entry.containerDesc) : null;
+      if (!(container instanceof HTMLElement) || isOwnNode(container) || isProtectedCozyNode(container)) container = null;
+
       actions.set(entry.id, buildGroupAction(entry, elements, container));
       return true;
     }
@@ -5847,8 +5974,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     on(root, 'pointercancel', endCandidateDrag, true);
   }
 
-  function refreshRoots() {
-    allOpenRoots().forEach(watchRoot);
+  function refreshRoots(force = false) {
+    allOpenRoots(force).forEach(watchRoot);
   }
 
   function makeVisualNode(template) {
@@ -6091,6 +6218,15 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     });
   }
 
+  function queueGeometrySync() {
+    if (geometryRaf) return;
+    geometryRaf = w.requestAnimationFrame(() => {
+      geometryRaf = 0;
+      if (IS_OUTER) sendGeometryToFrameWorkers();
+      else if (IS_FRAME_WORKER) sendControlGeometryToOuter();
+    });
+  }
+
   function installMessaging() {
     on(w, 'message', event => {
       const data = event.data;
@@ -6098,6 +6234,17 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
       if (IS_OUTER) {
         if (event.origin !== 'https://frame.pingpong.ai') return;
+
+        const scene = [...d.querySelectorAll('iframe')].find(frame => {
+          try {
+            return frame.contentWindow === event.source &&
+              /^https:\/\/frame\.pingpong\.ai\//i.test(frame.src || '');
+          } catch (_) {
+            return false;
+          }
+        });
+        if (!scene) return;
+
         if (data.type === 'SYNC') syncRemoteActions(data.items, event.source);
         else if (data.type === 'TOAST') toast(data.message || '');
         else if (data.type === 'DRAG_STATE') {
@@ -6109,10 +6256,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
             remoteControlGeometry = null;
             placeLauncher();
           } else {
-            const scene = [...d.querySelectorAll('iframe')].find(frame => {
-              try { return frame.contentWindow === event.source; } catch (_) { return false; }
-            });
-            if (!scene) return;
             const fr = scene.getBoundingClientRect();
             remoteControlGeometry = {
               left: fr.left + Number(data.line.left || 0),
@@ -6123,7 +6266,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
             placeLauncher();
           }
         } else if (data.type === 'HELLO') {
-          sendGeometryToFrameWorkers();
+          queueGeometrySync();
           try { event.source?.postMessage({ channel: CHANNEL, type: 'REQUEST_CONTROL_GEOMETRY' }, '*'); } catch (_) {}
         }
         return;
@@ -6131,6 +6274,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
       if (IS_FRAME_WORKER) {
         if (!/(^https:\/\/zeta-ai\.io$)|(^https:\/\/[^/]+\.zeta-ai\.io$)/i.test(event.origin)) return;
+        if (event.source !== w.parent) return;
         if (data.type === 'GEOMETRY') {
           remoteGeometry = { launcher: data.launcher, frame: data.frame };
         } else if (data.type === 'REQUEST_CONTROL_GEOMETRY') {
@@ -6390,19 +6534,20 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       clearTimeout(scanTimer);
       scanTimer = w.setTimeout(() => {
         refreshRoots();
-        restoreSavedEntries();
-        if (IS_FRAME_WORKER) sendControlGeometryToOuter();
-      }, 100);
+        if (savedEntries.size) restoreSavedEntries();
+        queueGeometrySync();
+      }, 160);
     });
     observer.observe(d.documentElement, { childList: true, subtree: true });
-    restoreInterval = w.setInterval(restoreSavedEntries, 2500);
   }
 
   function destroy() {
     clearTimeout(scanTimer);
     clearTimeout(toastTimer);
-    clearInterval(restoreInterval);
-    clearInterval(geometryInterval);
+    if (geometryRaf) {
+      w.cancelAnimationFrame(geometryRaf);
+      geometryRaf = 0;
+    }
     observer?.disconnect();
     disposers.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
     restoreAllHidden();
@@ -6418,24 +6563,37 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     if (IS_OUTER) {
       createUI();
-      geometryInterval = w.setInterval(sendGeometryToFrameWorkers, 700);
-      on(w, 'resize', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      on(w, 'resize', () => { requestAnimationFrame(placePanel); queueGeometrySync(); }, { passive: true });
+      on(w, 'scroll', queueGeometrySync, { passive: true, capture: true });
       if (w.visualViewport) {
-        on(w.visualViewport, 'resize', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
-        on(w.visualViewport, 'scroll', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+        on(w.visualViewport, 'resize', () => { requestAnimationFrame(placePanel); queueGeometrySync(); }, { passive: true });
+        on(w.visualViewport, 'scroll', () => { requestAnimationFrame(placePanel); queueGeometrySync(); }, { passive: true });
       }
     } else if (IS_FRAME_WORKER) {
-      on(w, 'resize', sendControlGeometryToOuter, { passive: true });
+      on(w, 'resize', queueGeometrySync, { passive: true });
+      on(w, 'scroll', queueGeometrySync, { passive: true, capture: true });
       if (w.visualViewport) {
-        on(w.visualViewport, 'resize', sendControlGeometryToOuter, { passive: true });
-        on(w.visualViewport, 'scroll', sendControlGeometryToOuter, { passive: true });
+        on(w.visualViewport, 'resize', queueGeometrySync, { passive: true });
+        on(w.visualViewport, 'scroll', queueGeometrySync, { passive: true });
       }
     }
 
+    on(w, 'pageshow', () => {
+      if (savedEntries.size) restoreSavedEntries();
+      queueGeometrySync();
+    }, { passive: true });
+
+    on(d, 'visibilitychange', () => {
+      if (d.visibilityState !== 'visible') return;
+      if (savedEntries.size) restoreSavedEntries();
+      queueGeometrySync();
+    });
+
     // outer 자체 플로팅 도구와 iframe 내부 플로팅 도구 모두 감지한다.
-    refreshRoots();
-    restoreSavedEntries();
+    refreshRoots(true);
+    if (savedEntries.size) restoreSavedEntries();
     startObserver();
+    queueGeometrySync();
     notifyOuter();
   }
 
@@ -6477,13 +6635,16 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let barEl = null;
   let observer = null;
   let refreshTimer = 0;
-  let accentTimer = 0;
-  let paintTimer = 0;
+  let accentSendTimer = 0;
+  let lastAccentSignature = '';
+  const accentStartupTimers = [];
   let frameAccent = null;
   let pos = null;
   let userMoved = false;
   let drag = null;
   let suppressNextClick = false;
+  let quickbarMissingScanAfter = 0;
+  const QUICKBAR_MISSING_SCAN_GAP = 1100;
   const quickDisposers = [];
 
   function qOn(target, type, handler, options) {
@@ -6681,9 +6842,13 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     const payload = bubbleAccentPayload();
     if (!payload) return;
 
+    const signature = `${payload.border || ''}|${payload.bg || ''}`;
+    if (signature === lastAccentSignature) return;
+
     const origin = parentOrigin();
     if (!origin) return;
 
+    lastAccentSignature = signature;
     try {
       w.parent.postMessage({
         channel: ACCENT_CHANNEL,
@@ -6692,10 +6857,27 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     } catch (_) {}
   }
 
+  function queueFrameAccent(delay = 120) {
+    if (!IS_FRAME || stopped) return;
+    clearTimeout(accentSendTimer);
+    accentSendTimer = setTimeout(() => {
+      accentSendTimer = 0;
+      sendFrameAccent();
+    }, delay);
+  }
+
   function installAccentBridge() {
     if (IS_FRAME) {
-      sendFrameAccent();
-      accentTimer = w.setInterval(sendFrameAccent, 1200);
+      // Startup one-shots cover late Safari hydration without permanent polling.
+      queueFrameAccent(0);
+      [450, 1400, 2800].forEach(ms => {
+        accentStartupTimers.push(setTimeout(() => queueFrameAccent(0), ms));
+      });
+
+      qOn(w, 'pageshow', () => queueFrameAccent(0), { passive: true });
+      qOn(d, 'visibilitychange', () => {
+        if (d.visibilityState === 'visible') queueFrameAccent(0);
+      });
       return;
     }
 
@@ -6762,14 +6944,23 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
   function findBar() {
     const byId = d.getElementById('zk_review_quickbar');
-    if (byId && visible(byId)) return byId;
+    if (byId && visible(byId)) {
+      quickbarMissingScanAfter = 0;
+      return byId;
+    }
+
+    const now = performance.now();
+    if (now < quickbarMissingScanAfter) return null;
 
     const all = [...d.querySelectorAll('button,[role="button"],div,span')];
     const core = CORE_LABELS
       .map(label => all.find(el => visible(el) && cleanText(el.textContent) === label))
       .filter(Boolean);
 
-    if (core.length < 3) return null;
+    if (core.length < 3) {
+      quickbarMissingScanAfter = now + QUICKBAR_MISSING_SCAN_GAP;
+      return null;
+    }
 
     let container = core[0].parentElement;
     for (let hops = 0; container && hops < 6; hops++, container = container.parentElement) {
@@ -6777,7 +6968,10 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       if (!core.every(el => container.contains(el))) continue;
 
       const r = container.getBoundingClientRect();
-      if (r.width <= Math.min(1100, w.innerWidth) && r.height <= 420) return container;
+      if (r.width <= Math.min(1100, w.innerWidth) && r.height <= 420) {
+        quickbarMissingScanAfter = 0;
+        return container;
+      }
     }
 
     return null;
@@ -6958,23 +7152,24 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   function discover() {
     if (stopped) return;
 
+    if (barEl?.isConnected && visible(barEl)) {
+      applyStyle(barEl, false);
+      return;
+    }
+
     const found = findBar();
     if (!found) {
       barEl = null;
       return;
     }
 
-    if (barEl !== found) {
-      barEl = found;
-      applyStyle(found, true);
-    } else {
-      applyStyle(found, false);
-    }
+    barEl = found;
+    applyStyle(found, true);
   }
 
   function queueDiscover() {
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(discover, 80);
+    refreshTimer = setTimeout(discover, barEl?.isConnected ? 80 : 220);
   }
 
   async function start() {
@@ -6985,26 +7180,35 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     discover();
 
-    observer = new MutationObserver(queueDiscover);
+    observer = new MutationObserver(() => {
+      queueDiscover();
+      if (IS_FRAME) queueFrameAccent();
+    });
     observer.observe(d.documentElement, { childList: true, subtree: true });
 
     qOn(w, 'resize', () => {
-      if (!barEl?.isConnected) return;
-      clampPos(barEl);
-      applyStyle(barEl, true);
+      if (barEl?.isConnected) {
+        clampPos(barEl);
+        applyStyle(barEl, true);
+      }
+      if (IS_FRAME) queueFrameAccent();
     }, { passive: true });
 
-    // Theme/bubble color may change without recreating the bar.
-    paintTimer = w.setInterval(() => {
-      if (barEl?.isConnected && visible(barEl)) paintBar(barEl);
-    }, 1200);
+    qOn(w, 'pageshow', () => {
+      if (barEl?.isConnected) applyStyle(barEl, true);
+    }, { passive: true });
+
+    qOn(d, 'visibilitychange', () => {
+      if (d.visibilityState === 'visible' && barEl?.isConnected) applyStyle(barEl, true);
+    });
   }
 
   function stop() {
     stopped = true;
     clearTimeout(refreshTimer);
-    clearInterval(accentTimer);
-    clearInterval(paintTimer);
+    clearTimeout(accentSendTimer);
+    accentSendTimer = 0;
+    accentStartupTimers.splice(0).forEach(timer => clearTimeout(timer));
     observer?.disconnect();
     pendingStore.clear();
     quickDisposers.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
