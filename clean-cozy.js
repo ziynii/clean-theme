@@ -3208,17 +3208,53 @@ function onSendKey(event){
 let previousHeaderElement=null;
 let previousHeaderText='';
 let appliedHeaderText='';
+let fixedHeaderCharacterName='';
+let fixedHeaderRoomKey='';
 function enhanceHeader(){
  const header=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-testid="chat-header-profile"] span');
  if(!header)return;
- const characterBody=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"]');
- if(!characterBody)return;
- const avatarName=characterBody.querySelector('button img[alt]')?.getAttribute('alt')?.trim()||'';
- const displayedName=characterBody.querySelector('.cc-meta-name')?.textContent?.trim()||
-  characterBody.querySelector('.caption1')?.textContent?.trim()||(FRAME_CHAT?frameName(characterBody):'')||'';
+
+ // Keep one registered character name fixed for the current room.
+ // Temporary/generated mob speakers have no real profile image, so they can never replace it.
+ const roomKey=FRAME_CHAT?ccStableRoomKey:outerStableRoomKey();
+ if(roomKey){
+  if(fixedHeaderRoomKey&&fixedHeaderRoomKey!==roomKey){
+   fixedHeaderCharacterName='';
+   previousHeaderElement=null;
+   previousHeaderText='';
+   appliedHeaderText='';
+  }
+  fixedHeaderRoomKey=roomKey;
+ }
+
  const validName=name=>Boolean(name&&!/^#[0-9a-f]{3,8}$/i.test(name)&&name!=='­');
- const name=[avatarName,displayedName].find(validName);
+
+ if(!fixedHeaderCharacterName){
+  const characterBodies=document.querySelectorAll(
+   ':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"]'
+  );
+
+  for(const body of characterBodies){
+   const image=body.querySelector(':scope > button img[alt], button img[alt]');
+   if(!image)continue;
+
+   const hasRegisteredProfile=Boolean(
+    (image.getAttribute('src')||'').trim()||
+    (image.getAttribute('srcset')||'').trim()||
+    (image.currentSrc||'').trim()
+   );
+   const avatarName=image.getAttribute('alt')?.trim()||'';
+
+   if(hasRegisteredProfile&&validName(avatarName)){
+    fixedHeaderCharacterName=avatarName;
+    break;
+   }
+  }
+ }
+
+ const name=fixedHeaderCharacterName;
  if(!name)return;
+
  if(header!==previousHeaderElement){
   previousHeaderElement=header;
   previousHeaderText=header.textContent||'';
@@ -3236,6 +3272,8 @@ function restoreHeader(){
   previousHeaderElement.textContent=previousHeaderText;
  }
  previousHeaderElement=null;
+ fixedHeaderCharacterName='';
+ fixedHeaderRoomKey='';
 }
 function enhanceLetters(){
  const bodies=document.querySelectorAll('[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]');
